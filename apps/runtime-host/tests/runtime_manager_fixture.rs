@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use ai_voice_runtime_host::{
@@ -187,6 +189,112 @@ async fn final_stderr_is_drained_after_child_exit() {
         "stderr tail was {:?}",
         String::from_utf8_lossy(&status.stderr_tail)
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn inherited_continuous_stdout_cannot_starve_absolute_drain_bound() {
+    let mut config = config("drain-descendant");
+    config.event_queue_capacity = 256;
+    let manager = RuntimeManager::new(config).unwrap();
+    let pid = manager.start_runtime().await.unwrap().pid.unwrap();
+    let began = Instant::now();
+
+    let error = tokio::time::timeout(Duration::from_millis(500), manager.ping(b"drain"))
+        .await
+        .expect("lifecycle reply exceeded the absolute pipe-drain bound")
+        .unwrap_err();
+
+    assert_eq!(error.kind, ManagerErrorKind::Protocol);
+    assert!(
+        began.elapsed() < Duration::from_millis(90),
+        "continuous stdout exceeded the independent discard-work cap: {:?}",
+        began.elapsed()
+    );
+    assert_pid_gone(pid).await;
+    assert!(
+        manager
+            .get_runtime_status()
+            .await
+            .unwrap()
+            .stderr_tail
+            .ends_with(b"drain-parent-final-stderr")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn blocked_stdin_writer_cannot_mask_earliest_pending_deadline() {
+    let mut config = config("stdin-block");
+    config.max_in_flight = 64;
+    config.command_queue_capacity = 256;
+    config.request_timeout = Duration::from_millis(150);
+    let manager = RuntimeManager::new(config).unwrap();
+    let pid = manager.start_runtime().await.unwrap().pid.unwrap();
+    let first_manager = manager.clone();
+    let began = Instant::now();
+    let first = tokio::spawn(async move { first_manager.ping(&[b'a'; 256]).await });
+    wait_for_stderr(&manager, b"first-request-held").await;
+
+    let mut flood = Vec::new();
+    for byte in 0_u8..63_u8 {
+        let flood_manager = manager.clone();
+        flood.push(tokio::spawn(async move {
+            flood_manager.ping(&[byte; 256]).await
+        }));
+    }
+
+    let error = tokio::time::timeout(Duration::from_secs(1), first)
+        .await
+        .expect("earliest pending deadline was masked by a blocked stdin write")
+        .unwrap()
+        .unwrap_err();
+
+    assert_eq!(error.kind, ManagerErrorKind::Timeout);
+    assert!(began.elapsed() < Duration::from_millis(500));
+    assert_pid_gone(pid).await;
+    for request in flood {
+        let _ = request.await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn command_flood_cannot_starve_owned_child_exit_observation() {
+    let mut config = config("exit-descendant");
+    config.command_queue_capacity = 256;
+    let manager = RuntimeManager::new(config).unwrap();
+    let pid = manager.start_runtime().await.unwrap().pid.unwrap();
+    let running = Arc::new(AtomicBool::new(true));
+    let mut flood = Vec::new();
+    for _ in 0..256 {
+        let flood_manager = manager.clone();
+        let flood_running = Arc::clone(&running);
+        flood.push(tokio::spawn(async move {
+            while flood_running.load(Ordering::Relaxed) {
+                let _ = flood_manager.get_runtime_status().await;
+            }
+        }));
+    }
+
+    let status = tokio::time::timeout(Duration::from_millis(750), async {
+        loop {
+            let status = manager.get_runtime_status().await.unwrap();
+            if status.state != RuntimeState::Connected {
+                return status;
+            }
+        }
+    })
+    .await
+    .expect("command traffic starved owned-child exit observation");
+
+    running.store(false, Ordering::Relaxed);
+    for task in flood {
+        task.await.unwrap();
+    }
+    assert_eq!(status.state, RuntimeState::Crashed);
+    assert_eq!(status.pid, None);
+    assert_pid_gone(pid).await;
 }
 
 async fn start_and_capture_pid(

@@ -16,7 +16,13 @@
 
 #if defined(_WIN32)
 #include <io.h>
+#include <windows.h>
 #else
+#if defined(__linux__)
+#include <fcntl.h>
+#endif
+#include <poll.h>
+#include <signal.h>
 #include <unistd.h>
 #endif
 
@@ -29,6 +35,7 @@ constexpr std::string_view kHello =
     R"({"runtime_version":"0.0.0","protocol_version":1,"generation":1,"health":"starting"})";
 constexpr std::string_view kCapabilities =
     R"({"platform":"unknown","architecture":"unknown","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"})";
+std::string g_executable_path;
 
 std::vector<std::uint8_t> bytes(std::string_view value) {
   return {value.begin(), value.end()};
@@ -89,6 +96,118 @@ void close_stdout() {
   std::exit(9);
 }
 
+[[noreturn]] void descendant_writer(std::uint64_t request_id) {
+#if !defined(_WIN32)
+  ::signal(SIGPIPE, SIG_DFL);
+#endif
+  const message::RuntimeMessage value{
+      message::MessageKind::Response,
+      ai_voice::contracts::kIpcProtocolCurrentVersion,
+      request_id,
+      message::Command::GetCapabilities,
+      ErrorCode::Success,
+      bytes(kCapabilities),
+  };
+  while (send(value)) {
+  }
+  std::exit(0);
+}
+
+[[noreturn]] void descendant_holder() {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < deadline) {
+#if defined(_WIN32)
+    DWORD state = 0U;
+    if (::GetNamedPipeHandleStateA(
+            ::GetStdHandle(STD_OUTPUT_HANDLE), &state, nullptr, nullptr, nullptr,
+            nullptr, 0U) == FALSE) {
+      std::exit(0);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+#else
+    pollfd descriptor{STDOUT_FILENO, POLLOUT, 0};
+    const auto result = ::poll(&descriptor, 1U, 10);
+    if (result > 0 &&
+        (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      std::exit(0);
+    }
+#endif
+  }
+  std::exit(0);
+}
+
+bool spawn_writer_descendant(std::uint64_t request_id) {
+#if defined(_WIN32)
+  auto command = '"' + g_executable_path + "\" --descendant-writer " +
+                 std::to_string(request_id);
+  STARTUPINFOA startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  const auto created = ::CreateProcessA(
+      nullptr,
+      command.data(),
+      nullptr,
+      nullptr,
+      TRUE,
+      CREATE_NO_WINDOW,
+      nullptr,
+      nullptr,
+      &startup,
+      &process);
+  if (created == FALSE) {
+    return false;
+  }
+  ::CloseHandle(process.hThread);
+  ::CloseHandle(process.hProcess);
+  return true;
+#else
+  const auto pid = ::fork();
+  if (pid == 0) {
+    descendant_writer(request_id);
+  }
+  return pid > 0;
+#endif
+}
+
+bool spawn_holder_descendant() {
+#if defined(_WIN32)
+  auto command = '"' + g_executable_path + "\" --descendant-holder";
+  STARTUPINFOA startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  const auto created = ::CreateProcessA(
+      nullptr,
+      command.data(),
+      nullptr,
+      nullptr,
+      TRUE,
+      CREATE_NO_WINDOW,
+      nullptr,
+      nullptr,
+      &startup,
+      &process);
+  if (created == FALSE) {
+    return false;
+  }
+  ::CloseHandle(process.hThread);
+  ::CloseHandle(process.hProcess);
+  return true;
+#else
+  const auto pid = ::fork();
+  if (pid == 0) {
+    descendant_holder();
+  }
+  return pid > 0;
+#endif
+}
+
+void minimize_stdin_pipe_capacity() {
+#if defined(__linux__) && defined(F_SETPIPE_SZ)
+  static_cast<void>(::fcntl(STDIN_FILENO, F_SETPIPE_SZ, 4'096));
+#endif
+}
+
 std::optional<std::string> mode_from_arguments(int argc, char** argv) {
   if (argc < 3 || argv == nullptr) {
     return std::nullopt;
@@ -104,6 +223,13 @@ std::optional<std::string> mode_from_arguments(int argc, char** argv) {
 int run_loop(std::string_view mode) {
   if (!send(hello())) {
     return 3;
+  }
+  if (mode == "exit-descendant") {
+    if (!spawn_holder_descendant()) {
+      return 8;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    return 7;
   }
 
   message::Decoder decoder;
@@ -126,8 +252,23 @@ int run_loop(std::string_view mode) {
     }
     for (const auto& request : decoded.messages) {
       if (request.command == message::Command::Ping) {
+        if (mode == "drain-descendant") {
+          std::fputs("drain-parent-final-stderr", stderr);
+          std::fflush(stderr);
+          for (std::size_t index = 0U; index < 8U; ++index) {
+            if (!spawn_writer_descendant(request.request_id)) {
+              return 8;
+            }
+          }
+          return 7;
+        }
         if (mode == "request-close-hang") {
           close_stdout();
+          hang();
+        }
+        if (mode == "stdin-block") {
+          std::fputs("first-request-held\n", stderr);
+          std::fflush(stderr);
           hang();
         }
         if (mode == "full-pending" || mode == "cancelled-pending" ||
@@ -188,6 +329,15 @@ int run_loop(std::string_view mode) {
 
 int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0U);
+  if (argc == 3 && std::string_view(argv[1]) == "--descendant-writer") {
+    descendant_writer(std::stoull(argv[2]));
+  }
+  if (argc == 2 && std::string_view(argv[1]) == "--descendant-holder") {
+    descendant_holder();
+  }
+  if (argc > 0 && argv != nullptr) {
+    g_executable_path = argv[0];
+  }
   const auto mode = mode_from_arguments(argc, argv);
   if (!mode.has_value()) {
     return 4;
@@ -229,6 +379,9 @@ int main(int argc, char** argv) {
     std::fputs("final-stderr-diagnostic", stderr);
     std::fflush(stderr);
     return 4;
+  }
+  if (*mode == "stdin-block") {
+    minimize_stdin_pipe_capacity();
   }
   return run_loop(*mode);
 }

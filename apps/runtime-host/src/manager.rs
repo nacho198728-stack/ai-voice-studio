@@ -30,6 +30,7 @@ const MAX_MOCK_WORK_ITERATIONS: u32 = 1_000_000;
 const STDOUT_READ_BYTES: usize = 2_048;
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
+const MAX_PIPE_DRAIN_EVENTS: usize = 64;
 const REAP_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -738,7 +739,7 @@ impl StderrTail {
     }
 }
 
-enum StdoutEvent {
+enum ProcessEvent {
     Message {
         generation: u64,
         message: RuntimeMessage,
@@ -752,11 +753,27 @@ enum StdoutEvent {
         error: ManagerError,
         reason: RuntimeExitReason,
     },
+    WriteComplete {
+        generation: u64,
+        request_id: u64,
+    },
+    WriteFailure {
+        generation: u64,
+        request_id: u64,
+        error: ManagerError,
+    },
+}
+
+struct WriteCommand {
+    generation: u64,
+    request_id: u64,
+    frame: Vec<u8>,
 }
 
 struct ProcessResources {
     child: Child,
-    stdin: Option<ChildStdin>,
+    writer_tx: Option<mpsc::Sender<WriteCommand>>,
+    writer_task: JoinHandle<()>,
     stdout_task: JoinHandle<()>,
     stderr_task: JoinHandle<()>,
     stderr_tail: Arc<Mutex<StderrTail>>,
@@ -780,8 +797,8 @@ struct StopContext {
 struct Actor {
     config: RuntimeManagerConfig,
     commands: mpsc::Receiver<ActorCommand>,
-    event_tx: mpsc::Sender<StdoutEvent>,
-    events: mpsc::Receiver<StdoutEvent>,
+    event_tx: mpsc::Sender<ProcessEvent>,
+    events: mpsc::Receiver<ProcessEvent>,
     state: StateModel,
     ids: RequestIds,
     pending: PendingRequests,
@@ -794,8 +811,8 @@ impl Actor {
     fn new(
         config: RuntimeManagerConfig,
         commands: mpsc::Receiver<ActorCommand>,
-        event_tx: mpsc::Sender<StdoutEvent>,
-        events: mpsc::Receiver<StdoutEvent>,
+        event_tx: mpsc::Sender<ProcessEvent>,
+        events: mpsc::Receiver<ProcessEvent>,
     ) -> Self {
         Self {
             state: StateModel::with_restart_policy(config.restart_max_attempts),
@@ -821,6 +838,7 @@ impl Actor {
             tokio::select! {
                 biased;
                 _ = tokio::time::sleep_until(deadline) => self.handle_deadlines().await,
+                _ = exit_poll.tick() => self.poll_process_exit().await,
                 event = self.events.recv() => {
                     if let Some(event) = event {
                         self.handle_event(event).await;
@@ -833,7 +851,6 @@ impl Actor {
                     };
                     self.handle_command(command).await;
                 }
-                _ = exit_poll.tick() => self.poll_process_exit().await,
             }
         }
     }
@@ -985,9 +1002,9 @@ impl Actor {
             stdout_eof: false,
             reply,
         });
-        if let Err(error) = self.write_frame(&frame, self.config.shutdown_timeout).await {
-            let reason = failure_exit_reason(&error);
-            self.fail_stream(error, reason).await;
+        if let Err(error) = self.queue_frame(request_id, frame) {
+            self.fail_stream(error, RuntimeExitReason::ProcessFailure)
+                .await;
         }
     }
 
@@ -1056,46 +1073,45 @@ impl Actor {
                 reply,
             )
             .expect("pending capacity and fresh monotonic ID were checked");
-        if let Err(error) = self.write_frame(&frame, self.config.request_timeout).await {
+        if let Err(error) = self.queue_frame(request_id, frame) {
             let pending = self.pending.take(request_id);
-            let reason = failure_exit_reason(&error);
-            self.fail_stream_deferred(error, reason, None, pending)
+            self.fail_stream_deferred(error, RuntimeExitReason::ProcessFailure, None, pending)
                 .await;
         }
     }
 
-    async fn write_frame(&mut self, frame: &[u8], limit: Duration) -> Result<(), ManagerError> {
+    fn queue_frame(&mut self, request_id: u64, frame: Vec<u8>) -> Result<(), ManagerError> {
         let Some(process) = self.process.as_mut() else {
             return Err(ManagerError::unavailable("Runtime process is unavailable"));
         };
-        let Some(stdin) = process.stdin.as_mut() else {
-            return Err(ManagerError::unavailable("Runtime stdin is closed"));
+        let Some(writer) = process.writer_tx.as_ref() else {
+            return Err(ManagerError::process("Runtime stdin writer is closed"));
         };
-        let write = async {
-            stdin.write_all(frame).await?;
-            stdin.flush().await
-        };
-        match timeout(limit, write).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => Err(ManagerError::process(format!(
-                "Runtime stdin write failed: {error}"
-            ))),
-            Err(_) => Err(ManagerError::timeout("Runtime stdin write timed out")),
-        }
+        writer
+            .try_send(WriteCommand {
+                generation: self.state.generation,
+                request_id,
+                frame,
+            })
+            .map_err(|error| {
+                ManagerError::process(format!("Runtime stdin writer queue failed: {error}"))
+            })
     }
 
-    async fn handle_event(&mut self, event: StdoutEvent) {
+    async fn handle_event(&mut self, event: ProcessEvent) {
         let generation = match &event {
-            StdoutEvent::Message { generation, .. }
-            | StdoutEvent::Eof { generation, .. }
-            | StdoutEvent::Failure { generation, .. } => *generation,
+            ProcessEvent::Message { generation, .. }
+            | ProcessEvent::Eof { generation, .. }
+            | ProcessEvent::Failure { generation, .. }
+            | ProcessEvent::WriteComplete { generation, .. }
+            | ProcessEvent::WriteFailure { generation, .. } => *generation,
         };
         if generation != self.state.generation || self.process.is_none() {
             return;
         }
         match event {
-            StdoutEvent::Message { message, .. } => self.handle_message(message).await,
-            StdoutEvent::Eof { clean, .. } => {
+            ProcessEvent::Message { message, .. } => self.handle_message(message).await,
+            ProcessEvent::Eof { clean, .. } => {
                 if !clean {
                     self.fail_stream(
                         ManagerError::protocol("Runtime stdout ended with a truncated frame"),
@@ -1111,8 +1127,18 @@ impl Actor {
                     self.handle_unexpected_stdout_eof().await;
                 }
             }
-            StdoutEvent::Failure { error, reason, .. } => {
+            ProcessEvent::Failure { error, reason, .. } => {
                 self.fail_stream(error, reason).await;
+            }
+            ProcessEvent::WriteComplete { request_id, .. } => {
+                let _ = request_id;
+            }
+            ProcessEvent::WriteFailure {
+                request_id, error, ..
+            } => {
+                let primary = self.pending.take(request_id);
+                self.fail_stream_deferred(error, RuntimeExitReason::ProcessFailure, None, primary)
+                    .await;
             }
         }
     }
@@ -1413,7 +1439,10 @@ impl Actor {
         let Some(mut process) = self.process.take() else {
             return RuntimeExit::from_status(reason, None);
         };
-        drop(process.stdin.take());
+        drop(process.writer_tx.take());
+        if force {
+            process.writer_task.abort();
+        }
         let mut status = process.exit_status.take();
         if force && status.is_none() {
             let _ = process.child.start_kill();
@@ -1439,17 +1468,32 @@ impl Actor {
         let deadline = Instant::now() + PIPE_DRAIN_TIMEOUT;
         let mut stdout_done = false;
         let mut stderr_done = false;
-        while !stdout_done || !stderr_done {
+        let mut writer_done = false;
+        let mut discarded_stdout_events = 0_usize;
+        let mut stdout_abort_requested = false;
+        while !stdout_done || !stderr_done || !writer_done {
+            if discarded_stdout_events >= MAX_PIPE_DRAIN_EVENTS
+                && !stdout_done
+                && !stdout_abort_requested
+            {
+                process.stdout_task.abort();
+                stdout_abort_requested = true;
+            }
             tokio::select! {
                 biased;
-                event = self.events.recv(), if !stdout_done => {
-                    if event.is_none() {
-                        stdout_done = true;
+                _ = tokio::time::sleep_until(deadline) => break,
+                event = self.events.recv(), if !stdout_done && !stdout_abort_requested => {
+                    match event {
+                        Some(ProcessEvent::Message { .. } | ProcessEvent::Eof { .. } | ProcessEvent::Failure { .. }) => {
+                            discarded_stdout_events += 1;
+                        }
+                        Some(ProcessEvent::WriteComplete { .. } | ProcessEvent::WriteFailure { .. }) => {}
+                        None => stdout_done = true,
                     }
                 }
                 _ = &mut process.stdout_task, if !stdout_done => stdout_done = true,
                 _ = &mut process.stderr_task, if !stderr_done => stderr_done = true,
-                _ = tokio::time::sleep_until(deadline) => break,
+                _ = &mut process.writer_task, if !writer_done => writer_done = true,
             }
         }
         if !stdout_done {
@@ -1459,6 +1503,10 @@ impl Actor {
         if !stderr_done {
             process.stderr_task.abort();
             let _ = process.stderr_task.await;
+        }
+        if !writer_done {
+            process.writer_task.abort();
+            let _ = process.writer_task.await;
         }
         self.state.stderr_tail = process.stderr_tail.lock().await.snapshot();
         self.state.pid = None;
@@ -1492,7 +1540,7 @@ impl Actor {
 fn spawn_process(
     config: &RuntimeManagerConfig,
     generation: u64,
-    events: mpsc::Sender<StdoutEvent>,
+    events: mpsc::Sender<ProcessEvent>,
 ) -> Result<ProcessResources, ManagerError> {
     let mut command = tokio::process::Command::new(&config.runtime_path);
     command
@@ -1528,11 +1576,14 @@ fn spawn_process(
         .take()
         .ok_or_else(|| ManagerError::process("Runtime stderr pipe was not created"))?;
     let stderr_tail = Arc::new(Mutex::new(StderrTail::new(config.stderr_tail_bytes)));
+    let (writer_tx, writer_rx) = mpsc::channel(config.max_in_flight + 1);
+    let writer_task = tokio::spawn(write_stdin(stdin, writer_rx, events.clone()));
     let stdout_task = tokio::spawn(read_stdout(stdout, generation, events));
     let stderr_task = tokio::spawn(read_stderr(stderr, Arc::clone(&stderr_tail)));
     Ok(ProcessResources {
         child,
-        stdin: Some(stdin),
+        writer_tx: Some(writer_tx),
+        writer_task,
         stdout_task,
         stderr_task,
         stderr_tail,
@@ -1541,10 +1592,39 @@ fn spawn_process(
     })
 }
 
+async fn write_stdin(
+    mut stdin: ChildStdin,
+    mut commands: mpsc::Receiver<WriteCommand>,
+    events: mpsc::Sender<ProcessEvent>,
+) {
+    while let Some(command) = commands.recv().await {
+        let result = async {
+            stdin.write_all(&command.frame).await?;
+            stdin.flush().await
+        }
+        .await;
+        let event = match result {
+            Ok(()) => ProcessEvent::WriteComplete {
+                generation: command.generation,
+                request_id: command.request_id,
+            },
+            Err(error) => ProcessEvent::WriteFailure {
+                generation: command.generation,
+                request_id: command.request_id,
+                error: ManagerError::process(format!("Runtime stdin write failed: {error}")),
+            },
+        };
+        let failed = matches!(event, ProcessEvent::WriteFailure { .. });
+        if events.send(event).await.is_err() || failed {
+            return;
+        }
+    }
+}
+
 async fn read_stdout(
     mut stdout: tokio::process::ChildStdout,
     generation: u64,
-    events: mpsc::Sender<StdoutEvent>,
+    events: mpsc::Sender<ProcessEvent>,
 ) {
     let mut decoder = Decoder::new();
     let mut buffer = [0_u8; STDOUT_READ_BYTES];
@@ -1552,14 +1632,14 @@ async fn read_stdout(
         match stdout.read(&mut buffer).await {
             Ok(0) => {
                 let clean = decoder.finish().is_ok();
-                let _ = events.send(StdoutEvent::Eof { generation, clean }).await;
+                let _ = events.send(ProcessEvent::Eof { generation, clean }).await;
                 return;
             }
             Ok(count) => match decoder.feed(&buffer[..count]) {
                 Ok(messages) => {
                     for message in messages {
                         if events
-                            .send(StdoutEvent::Message {
+                            .send(ProcessEvent::Message {
                                 generation,
                                 message,
                             })
@@ -1572,7 +1652,7 @@ async fn read_stdout(
                 }
                 Err(error) => {
                     let _ = events
-                        .send(StdoutEvent::Failure {
+                        .send(ProcessEvent::Failure {
                             generation,
                             error: ManagerError::new(
                                 error.code,
@@ -1587,7 +1667,7 @@ async fn read_stdout(
             },
             Err(error) => {
                 let _ = events
-                    .send(StdoutEvent::Failure {
+                    .send(ProcessEvent::Failure {
                         generation,
                         error: ManagerError::process(format!(
                             "Runtime stdout read failed: {error}"
@@ -1620,14 +1700,6 @@ fn remote_error(code: ErrorCode, payload: &[u8]) -> ManagerError {
     )
 }
 
-fn failure_exit_reason(error: &ManagerError) -> RuntimeExitReason {
-    if error.kind == ManagerErrorKind::Timeout {
-        RuntimeExitReason::Timeout
-    } else {
-        RuntimeExitReason::ProcessFailure
-    }
-}
-
 fn validate_success_payload(command: Command, payload: &[u8]) -> Result<(), ManagerError> {
     match command {
         Command::Ping if payload.len() <= MAX_PING_PAYLOAD_BYTES => Ok(()),
@@ -1646,9 +1718,14 @@ fn validate_success_payload(command: Command, payload: &[u8]) -> Result<(), Mana
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Waker};
     use std::time::Duration;
 
     use ai_voice_contracts::runtime_message::Command;
+    use tokio::io::AsyncWrite;
     use tokio::sync::oneshot;
     use tokio::time::Instant;
 
@@ -1661,6 +1738,130 @@ mod tests {
             generation: 1,
             health: "starting".to_owned(),
         }
+    }
+
+    fn fill_stdin_pipe(stdin: &mut ChildStdin) {
+        let mut context = Context::from_waker(Waker::noop());
+        let bytes = [0_u8; 4_096];
+        for _ in 0..1_024 {
+            match Pin::new(&mut *stdin).poll_write(&mut context, &bytes) {
+                Poll::Ready(Ok(count)) if count != 0 => {}
+                Poll::Pending => return,
+                other => panic!("could not fill controlled stdin pipe: {other:?}"),
+            }
+        }
+        panic!("controlled stdin pipe never became full");
+    }
+
+    #[cfg(unix)]
+    fn blocked_stdin_child() -> Child {
+        tokio::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    fn blocked_stdin_child() -> Child {
+        tokio::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "ping -n 31 127.0.0.1 >NUL"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    async fn test_process_exists(pid: u32) -> bool {
+        tokio::process::Command::new("/bin/kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .unwrap()
+            .success()
+    }
+
+    #[cfg(windows)]
+    async fn test_process_exists(pid: u32) -> bool {
+        let output = tokio::process::Command::new("tasklist.exe")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn full_stdin_pipe_cannot_mask_an_existing_earlier_deadline() {
+        let mut child = blocked_stdin_child();
+        let pid = child.id().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        fill_stdin_pipe(&mut stdin);
+        let runtime_path = std::env::current_exe().unwrap();
+        let mut config = RuntimeManagerConfig::new(runtime_path.clone(), runtime_path);
+        config.request_timeout = Duration::from_secs(2);
+        let (command_tx, command_rx) = mpsc::channel(config.command_queue_capacity);
+        let (event_tx, event_rx) = mpsc::channel(config.event_queue_capacity);
+        let mut actor = Actor::new(config, command_rx, event_tx.clone(), event_rx);
+        actor.state.begin_start(1).unwrap();
+        actor.state.connected(pid, canonical_test_hello());
+        let (writer_tx, writer_rx) = mpsc::channel(actor.config.max_in_flight + 1);
+        actor.process = Some(ProcessResources {
+            child,
+            writer_tx: Some(writer_tx),
+            writer_task: tokio::spawn(write_stdin(stdin, writer_rx, event_tx)),
+            stdout_task: tokio::spawn(pending()),
+            stderr_task: tokio::spawn(pending()),
+            stderr_tail: Arc::new(Mutex::new(StderrTail::new(64))),
+            exit_status: None,
+            exit_drain_deadline: None,
+        });
+        let (expired_tx, expired_rx) = oneshot::channel();
+        actor
+            .pending
+            .insert(
+                41,
+                Command::Ping,
+                Instant::now() + Duration::from_millis(50),
+                expired_tx,
+            )
+            .unwrap();
+        let actor_task = tokio::spawn(actor.run());
+        let (blocked_tx, _blocked_rx) = oneshot::channel();
+        command_tx
+            .send(ActorCommand::Request {
+                command: Command::Ping,
+                payload: vec![0; MAX_PING_PAYLOAD_BYTES],
+                reply: blocked_tx,
+            })
+            .await
+            .unwrap();
+
+        let error = timeout(Duration::from_millis(500), expired_rx)
+            .await
+            .expect("blocked stdin write masked the existing earlier deadline")
+            .unwrap()
+            .unwrap_err();
+
+        assert_eq!(error.kind, ManagerErrorKind::Timeout);
+        assert!(!test_process_exists(pid).await);
+        let (status_tx, status_rx) = oneshot::channel();
+        command_tx
+            .send(ActorCommand::Status { reply: status_tx })
+            .await
+            .unwrap();
+        assert_eq!(status_rx.await.unwrap().pid, None);
+        drop(command_tx);
+        actor_task.await.unwrap();
     }
 
     #[test]
