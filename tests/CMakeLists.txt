@@ -43,7 +43,10 @@ if(CMAKE_DL_LIBS)
 endif()
 add_test(
   NAME aivs_mock_voice_engine_contract_matrix_test
-  COMMAND aivs_mock_voice_engine_contract_matrix_test $<TARGET_FILE:aivs_mock_voice_engine>
+  COMMAND
+    aivs_mock_voice_engine_contract_matrix_test
+    $<TARGET_FILE:aivs_mock_voice_engine>
+    $<TARGET_FILE:aivs_fixture_mock_generation_exhaustion>
 )
 if(UNIX)
   add_test(
@@ -114,6 +117,26 @@ add_test(
 add_library(aivs_fixture_missing_factory SHARED fixtures/missing_factory.cpp)
 set_target_properties(
   aivs_fixture_missing_factory
+  PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES
+)
+
+add_library(
+  aivs_fixture_mock_generation_exhaustion
+  SHARED
+  ../engines/mock/mock_voice_engine.cpp
+)
+target_link_libraries(
+  aivs_fixture_mock_generation_exhaustion
+  PRIVATE ai_voice::voice_engine_abi
+)
+target_compile_definitions(
+  aivs_fixture_mock_generation_exhaustion
+  PRIVATE
+    AIVS_VOICE_ENGINE_BUILD
+    AIVS_MOCK_ENABLE_INITIAL_GENERATION_TEST_SEAM
+)
+set_target_properties(
+  aivs_fixture_mock_generation_exhaustion
   PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES
 )
 

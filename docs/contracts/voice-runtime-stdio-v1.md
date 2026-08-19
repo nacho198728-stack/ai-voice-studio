@@ -85,10 +85,7 @@ missing, relative, or malformed arguments are rejected; configuration is never
 read from environment variables or a search path. Windows enters through wide
 `wmain` arguments and keeps the plugin path wide through `LoadLibraryW`; all
 platforms reject embedded NUL before the native loader. The Mock configuration
-sent by Runtime is the strict UTF-8 form `{"work_iterations":N}`. For ABI
-generation-exhaustion contract tests only, the plugin also accepts the exact
-form `{"work_iterations":N,"initial_generation":G}`, where `G` is canonical
-decimal `0..UINT64_MAX`; Runtime CLI never emits this seam. The simulated model
+is exactly the strict UTF-8 form `{"work_iterations":N}`. The simulated model
 contract is identifier `mock-v1` with an empty model-data view.
 
 The Mock accepts float32 interleaved PCM at 8–192 kHz, one or two channels, a

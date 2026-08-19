@@ -20,11 +20,15 @@ constexpr std::string_view kEngineName = "AIVS Mock VoiceEngine";
 constexpr std::string_view kEngineVersion = "1.0.0";
 constexpr std::string_view kModelIdentifier = "mock-v1";
 constexpr std::string_view kConfigurationPrefix = R"({"work_iterations":)";
+#if defined(AIVS_MOCK_ENABLE_INITIAL_GENERATION_TEST_SEAM)
 constexpr std::string_view kInitialGenerationField = R"(,"initial_generation":)";
+#endif
 
 struct MockConfiguration {
   std::uint32_t work_iterations;
+#if defined(AIVS_MOCK_ENABLE_INITIAL_GENERATION_TEST_SEAM)
   std::uint64_t initial_generation;
+#endif
 };
 
 enum class EngineState : std::uint8_t {
@@ -82,7 +86,10 @@ bool parse_canonical_decimal(
 
 bool parse_configuration(
     const aivs_bytes_view_t& configuration, MockConfiguration& parsed) noexcept {
-  parsed = {0U, 0U};
+  parsed.work_iterations = 0U;
+#if defined(AIVS_MOCK_ENABLE_INITIAL_GENERATION_TEST_SEAM)
+  parsed.initial_generation = 0U;
+#endif
   if (!valid_bytes_view(configuration) || configuration.size_bytes > 64U) {
     return false;
   }
@@ -93,18 +100,26 @@ bool parse_configuration(
     return false;
   }
   const auto body = text.substr(kConfigurationPrefix.size(), text.size() - kConfigurationPrefix.size() - 1U);
+#if defined(AIVS_MOCK_ENABLE_INITIAL_GENERATION_TEST_SEAM)
   const auto generation_position = body.find(kInitialGenerationField);
   const auto work_digits = body.substr(0U, generation_position);
+#else
+  const auto work_digits = body;
+#endif
   std::uint64_t work = 0U;
   if (!parse_canonical_decimal(work_digits, kMaximumWorkIterations, work)) {
     return false;
   }
   parsed.work_iterations = static_cast<std::uint32_t>(work);
+#if defined(AIVS_MOCK_ENABLE_INITIAL_GENERATION_TEST_SEAM)
   if (generation_position == std::string_view::npos) {
     return true;
   }
   const auto generation_digits = body.substr(generation_position + kInitialGenerationField.size());
   return parse_canonical_decimal(generation_digits, UINT64_MAX, parsed.initial_generation);
+#else
+  return true;
+#endif
 }
 
 bool view_equals(const aivs_bytes_view_t& view, std::string_view expected) noexcept {
@@ -116,8 +131,12 @@ bool view_equals(const aivs_bytes_view_t& view, std::string_view expected) noexc
 
 struct aivs_voice_engine_handle {
   explicit aivs_voice_engine_handle(MockConfiguration configuration) noexcept
+#if defined(AIVS_MOCK_ENABLE_INITIAL_GENERATION_TEST_SEAM)
       : work_iterations(configuration.work_iterations),
         stream_generation(configuration.initial_generation) {}
+#else
+      : work_iterations(configuration.work_iterations) {}
+#endif
 
   EngineState state{EngineState::Initialized};
   std::uint32_t work_iterations{0U};

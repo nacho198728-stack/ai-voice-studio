@@ -282,6 +282,7 @@ void initialize_and_shutdown_validate_prefix_version_reserved_and_retry(
            std::string_view(R"({"work_iterations":01})"),
            std::string_view(R"({"work_iterations":1000001})"),
            std::string_view(R"({"work_iterations":0,"unknown":1})"),
+           std::string_view(R"({"work_iterations":0,"initial_generation":1})"),
            std::string_view(R"({"work_iterations":0,"initial_generation":01})"),
            std::string_view(R"({"work_iterations":0,"initial_generation":18446744073709551616})"),
        }) {
@@ -406,7 +407,7 @@ void info_rejects_prefix_version_reserved_overlap_and_normalizes_capacity(
   shutdown(api, engine);
 }
 
-void model_prepare_reset_and_generation_exhaustion_preserve_state(
+void model_prepare_reset_and_normal_generation_preserve_state(
     const aivs_voice_engine_api_t& api) {
   auto* engine = initialize(api);
   auto wrong = model_request("wrong");
@@ -523,6 +524,7 @@ void model_prepare_reset_and_generation_exhaustion_preserve_state(
     assert(invalid_result.stream_generation == 0U);
   }
   assert(api.prepare_stream(engine, &prepare, &prepared) == AIVS_ERROR_SUCCESS);
+  assert(prepared.stream_generation == 1U);
 
   const std::array invalid_resets{
       [&] {
@@ -569,10 +571,24 @@ void model_prepare_reset_and_generation_exhaustion_preserve_state(
     assert(invalid_result.stream_generation == 0U);
   }
   assert(api.reset(engine, &reset_request, &reset_result) == AIVS_ERROR_SUCCESS);
+  assert(reset_result.stream_generation == 2U);
   assert(api.reset(engine, &reset_request, &reset_result) == AIVS_ERROR_INVALID_STATE);
   assert(api.prepare_stream(engine, &prepare, &prepared) == AIVS_ERROR_SUCCESS);
+  assert(prepared.stream_generation == 3U);
   shutdown(api, engine);
+}
 
+void generation_exhaustion_is_bounded(const aivs_voice_engine_api_t& api) {
+  auto prepare = prepare_request();
+  auto prepared = aivs_prepare_stream_result_t AIVS_PREPARE_STREAM_RESULT_INIT;
+  auto reset_request = aivs_reset_request_t{
+      sizeof(aivs_reset_request_t),
+      AIVS_VOICE_ENGINE_ABI_V1_VERSION,
+      AIVS_RESET_REASON_CALLER_REQUEST,
+      0U,
+      {0U, 0U},
+  };
+  auto reset_result = aivs_reset_result_t AIVS_RESET_RESULT_INIT;
   auto* exhausted = initialize(
       api,
       R"({"work_iterations":0,"initial_generation":18446744073709551614})");
@@ -776,13 +792,19 @@ void process_and_metrics_validate_nested_contract_and_failure_atomicity(
 }  // namespace
 
 int main(int argc, char** argv) {
-  assert(argc == 2);
-  DynamicLibrary library(argv[1]);
-  const auto factory = library.factory();
-  factory_failure_matrix_is_bounded_and_negotiates_v1(factory);
-  const auto api = complete_api(factory);
-  initialize_and_shutdown_validate_prefix_version_reserved_and_retry(api);
-  info_rejects_prefix_version_reserved_overlap_and_normalizes_capacity(api);
-  model_prepare_reset_and_generation_exhaustion_preserve_state(api);
-  process_and_metrics_validate_nested_contract_and_failure_atomicity(api);
+  assert(argc == 3);
+  {
+    DynamicLibrary production_library(argv[1]);
+    const auto production_factory = production_library.factory();
+    factory_failure_matrix_is_bounded_and_negotiates_v1(production_factory);
+    const auto production_api = complete_api(production_factory);
+    initialize_and_shutdown_validate_prefix_version_reserved_and_retry(production_api);
+    info_rejects_prefix_version_reserved_overlap_and_normalizes_capacity(production_api);
+    model_prepare_reset_and_normal_generation_preserve_state(production_api);
+    process_and_metrics_validate_nested_contract_and_failure_atomicity(production_api);
+  }
+  {
+    DynamicLibrary exhaustion_test_library(argv[2]);
+    generation_exhaustion_is_bounded(complete_api(exhaustion_test_library.factory()));
+  }
 }
