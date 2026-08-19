@@ -105,8 +105,9 @@ variables.
 
 Artifacts carry target-qualified names where Tauri or dynamic-library collision
 avoidance requires them. Platform-specific `.exe`, `.dll`, `.dylib`, and `.so`
-rules are centralized in the staging and resolution seam. Windows execution and
-installer validation remain later CI/release work; signing, notarization,
+rules are centralized in the staging and resolution seam. The checked-in CI
+defines a Windows x64 MSVC portable-layout gate, but it has not run on a real
+Windows runner in this workspace and is not accepted yet. Signing, notarization,
 auto-update, and installers are outside this decision.
 
 ## Alternatives considered

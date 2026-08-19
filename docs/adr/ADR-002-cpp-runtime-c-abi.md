@@ -1,84 +1,100 @@
-# ADR-002: C++ Runtime to VoiceEngine C ABI
+# ADR-002: Isolate the C++ Runtime behind a stable VoiceEngine C ABI
 
 - Status: Accepted
 - Date: 2026-08-19
 
 ## Context
 
-VoiceEngine implementations may evolve independently from the desktop control
-plane and may fail while loading or processing model data. The engine boundary
-therefore belongs inside the isolated native Runtime, not in Rust or Tauri.
-The required control and data path is:
+VoiceEngine implementations are dynamically loaded native code that may fail
+while loading, validating state, or processing buffers. Those failure modes
+must not share the Tauri/Rust control process. Independently built Runtime and
+engine modules also cannot safely exchange C++ standard-library objects,
+exceptions, or allocator ownership across compiler and platform boundaries.
 
-`Tauri -> Rust RuntimeManager -> IPC -> C++ Runtime -> VoiceEngine C ABI -> Engine`
+Phase 0.5 now implements and tests this path:
 
-Phase 0.5 defines this boundary only. It does not load plugins, run a Runtime,
-open audio devices, or implement an engine. ADR-003 remains reserved for the
-Phase 1 Audio Engine decision.
+`Rust RuntimeManager -> RuntimeMessage IPC -> C++ voice-runtime -> VoiceEngine C ABI -> Mock VoiceEngine`
+
+The Mock implementation proves loading, lifecycle, processing, reset, metrics,
+errors, and packaging. It is not an Audio Engine or AI model. ADR-003 remains
+reserved for the Phase 1 Audio Engine decision.
 
 ## Decision
 
-`runtime/api/voice_engine.h` is the stable, pure-C VoiceEngine ABI v1. A plugin
+Run native engine code only inside the separately supervised C++ Runtime.
+`runtime/api/voice_engine.h` is the stable pure-C VoiceEngine ABI v1. Each plugin
 exports exactly one symbol, `aivs_voice_engine_get_api`, which negotiates the
-canonical VoiceEngine ABI version and fills a versioned function table. The
-table contains initialize, shutdown, get-engine-info, load-model,
-prepare-stream, process-audio, reset, and get-metrics operations.
+canonical version and fills a versioned function table with eight operations:
+initialize, shutdown, get engine info, load model, prepare stream, process
+audio, reset, and get metrics.
 
-The canonical contract generator owns the ABI version and the fixed-width
-error-code mapping for Rust, C++, and C. The engine range adds only
-`InvalidArgument` (1301), `InvalidState` (1302), and `BufferTooSmall` (1303);
-existing values remain unchanged.
+The ABI uses fixed-width integers, `struct_size` and `abi_version` prefixes,
+zeroed reserved fields, caller-owned buffers, explicit lengths/capacities, and
+an opaque plugin-owned handle destroyed by successful shutdown. UTF-8 is
+length-delimited. Every operation returns a canonical integer error; no C++
+exception or Rust panic may cross the boundary.
+
+The Runtime owns dynamic-library loading and serializes control operations per
+handle. After `prepare_stream`, one caller at a time may call `process_audio`;
+that path must not allocate, block, perform I/O, log, read environment state,
+or throw. `get_metrics` may run concurrently only through nonblocking atomic
+snapshots.
+
+Phase 0.5 supplies a deterministic Mock plugin and MockPipeline. The pipeline
+processes a fixed 128-frame stereo buffer and transports only an 80-byte summary
+with frame count, checksum, and metrics over RuntimeMessage. PCM never leaves
+the native process.
 
 ## Rationale
 
-Keeping engines behind the isolated C++ Runtime contains native model faults
-outside the Tauri/Rust control plane. A language-neutral, append-only C ABI
-lets independently compiled modules negotiate a stable version without sharing
-a C++ standard-library or allocator ABI. Caller-owned buffers and fixed-width
-results make ownership explicit, while the prepare/process contract preserves
-the realtime path's no-allocation/no-blocking boundary. These choices carry the
-same monorepo principles in ADR-000—reviewable shared contracts with explicit
-module boundaries—into the Runtime-to-engine boundary.
+Process isolation contains library crashes and malformed native behavior below
+the control plane. A small append-only C ABI avoids compiler, STL, exception,
+and allocator compatibility problems while remaining usable from C and C++ on
+macOS and Windows. Explicit ownership and sizes make adversarial validation
+possible. The prepare/process split establishes a realtime-compatible boundary
+without prematurely choosing the Phase 1 device/stream architecture.
 
-## Consequences
-
-- Engine implementations and the C++ Runtime can be built independently while
-  retaining a portable ABI contract on macOS and Windows.
-- The ABI intentionally cannot express C++ ownership, exceptions, STL objects,
-  platform handles, or Rust/Tauri references. Every function returns the
-  canonical `aivs_error_code_t`; exceptions and panics must be caught before
-  crossing the boundary.
-- Initial Phase 0.5 PCM is IEEE-754 float32, interleaved, with explicit sample
-  rate, channel count, frame count/capacity, sequence, and sample-time fields.
-  This is a data contract, not a device or Audio Engine implementation.
-- ABI compatibility is append-only: every extensible structure and the API
-  table lead with `struct_size` and `abi_version`; input reserved fields must
-  be zero and implementations return output reserved fields as zero.
-
-## Compatibility, ownership, and threading consequences
-
-The Runtime owns plugin loading and calls the factory; no Rust or Tauri code
-may load, store, or dereference this ABI. The plugin owns the opaque handle
-until successful shutdown destroys it. All buffers, including UTF-8 strings,
-PCM, and output capacity, remain caller-owned and use explicit byte or frame
-counts. UTF-8 is length-delimited and never requires a NUL terminator.
-
-The Runtime serializes factory and initialize calls per module; independent
-handles may run concurrently. Control operations are serialized per live handle
-and cannot overlap with processing. One caller at a time may invoke `process_audio` for a handle. After
-successful `prepare_stream`, processing must not allocate, take a blocking
-lock, perform I/O, log, read environment state, or propagate an exception.
-`get_metrics` may run concurrently only with `process_audio`; it returns a
-nonblocking best-effort atomic-counter snapshot.
+The deterministic Mock makes the contract executable: dynamic loading, exact
+transforms and checksums, reset semantics, metrics, error handling, simulated
+work, and unique exports are verified without introducing AI or audio devices.
 
 ## Alternatives considered
 
-- **Rust FFI directly to engines:** rejected because it would put dynamic model
-  code and native failure modes in the control process.
-- **C++ virtual interface or a C++ SDK:** rejected because compiler, standard
-  library, exception, and allocation ABI choices would leak across plugins.
-- **IPC to each engine:** rejected for this phase because the Runtime already
-  supplies process isolation; an in-process C boundary is the narrower plugin
-  contract.
-- **Stable concrete PCM/device API:** rejected because Phase 0.5 must not open
-  audio devices or commit the Phase 1 Audio Engine design.
+### Rust FFI directly to engine plugins
+
+This would load untrusted/native engine failure modes into the control process
+and weaken the process boundary established by RuntimeManager.
+
+### C++ virtual interface or shared C++ SDK
+
+Virtual tables, STL types, RTTI, exceptions, and allocator choices are not a
+portable ABI across compiler versions and platforms.
+
+### One process per engine behind another IPC protocol
+
+The C++ Runtime already supplies the required process isolation. A second
+process protocol would add lifecycle and serialization complexity before there
+is evidence it is needed.
+
+### Define a device or Audio Engine API now
+
+Device selection, clocks, buffering, realtime threads, and recovery belong to
+Phase 1. The current PCM structure is a plugin data contract, not permission to
+open devices or accept ADR-003 early.
+
+## Consequences
+
+- Rust and Tauri never load, store, or dereference a VoiceEngine library or
+  handle; only `voice-runtime` does so.
+- Runtime and plugins can be compiled independently while preserving one tested
+  ABI on macOS and Windows.
+- ABI evolution is append-only. Existing fields, operations, versions, and
+  canonical error values cannot be silently reinterpreted.
+- The plugin owns its opaque handle; callers own all strings, PCM, and output
+  buffers. Shutdown, error, and buffer-capacity behavior must remain explicit.
+- Native integration, export inspection, adversarial compile fixtures, and
+  deterministic benchmark tests are required compatibility gates.
+- The Mock's processing and latency controls are test infrastructure only; they
+  do not claim product audio, model loading, inference quality, or performance.
+- ADR-003 must separately decide the Phase 1 Audio Engine and may not weaken the
+  process, ABI, realtime, or no-PCM-over-IPC guarantees recorded here.

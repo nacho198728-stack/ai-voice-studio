@@ -16,7 +16,7 @@ AI Voice Studio is a native desktop voice-conversion product. This repository is
 | `docs/` | Architecture, development, and decision records. |
 | `tools/` | Reproducible developer and repository tooling. |
 
-The V1.0 architecture document and implementation plans remain at the repository root and in `plans/` as the authoritative project baseline. The initial pnpm and Cargo workspaces establish package boundaries only; they contain no runtime behavior, dependencies, audio devices, AI runtime, Python runtime, or user features.
+The V1.0 architecture document and implementation plans remain at the repository root and in `plans/` as the authoritative project baseline. Phase 0.5 implements the offline Tauri/Rust control plane, isolated C++ Runtime, stable C ABI, and deterministic Mock engine. It does not implement audio-device access, an AI/model runtime, Python, or a user voice-conversion workflow. See the [implemented architecture](docs/architecture/ARCHITECTURE.md).
 
 ## Native build entry points
 
@@ -27,4 +27,4 @@ The checked-in CMake presets provide the native build baseline. Run `cmake --pre
 - Version: see [VERSION](VERSION).
 - License status: see [LICENSE.md](LICENSE.md).
 - Third-party notices: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- Architectural decisions: see [docs/adr](docs/adr).
+- Documentation and decision index: see [docs](docs/README.md).

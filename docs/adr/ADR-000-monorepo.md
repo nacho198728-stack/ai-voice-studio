@@ -5,35 +5,66 @@
 
 ## Context
 
-AI Voice Studio spans a desktop shell, Rust control plane, C++ runtime, audio boundary, engine plugins, shared contracts, tests, and developer tooling. These components must evolve together while preserving explicit process and ABI boundaries. At repository initialization, the project needs one location for its architecture, plans, contracts, and cross-module verification without creating nested repositories.
+AI Voice Studio spans a Tauri application, Rust control plane, isolated C++
+Runtime, stable C plugin ABI, Mock engine, shared contracts, cross-language
+tests, and repository tooling. These parts must evolve together while
+preserving explicit process and ownership boundaries. The project baseline and
+plans already lived at the current Git root, so a second repository boundary
+would split the authoritative history.
 
 ## Decision
 
-Use the current Git repository as the single AI Voice Studio monorepo. Its top-level modules are `apps`, `core`, `audio`, `runtime`, `engines`, `backend`, `tests`, `docs`, and `tools`.
+Use the current Git repository as the single monorepo. Top-level ownership is
+divided among `apps`, `core`, `audio`, `runtime`, `engines`, `backend`, `tests`,
+`docs`, and `tools`. pnpm, Cargo, and CMake remain independent build graphs
+coordinated by root scripts, CTest, and one cross-platform CI workflow.
 
-ADR-001 is reserved for the Tauri + Rust Control Plane. ADR-002 is reserved for the C++ Runtime + C ABI. ADR-003 is reserved for the Phase 1 Audio Engine.
+Cross-language contracts and their generators live with the repository, and a
+change may update producers, consumers, tests, documentation, and packaging
+atomically. Runtime process isolation and the VoiceEngine C ABI remain hard
+runtime boundaries despite sharing source control.
+
+Decision numbering is also repository-wide: ADR-001 owns the Tauri/Rust control
+plane, ADR-002 owns the C++ Runtime/C ABI, and ADR-003 is reserved for the Phase
+1 Audio Engine. Reserving a number is not accepting or creating that decision.
 
 ## Rationale
 
-One repository keeps shared contracts, version compatibility, architecture documentation, and cross-language tests reviewable in the same change as their consumers. It also makes the intended module boundaries visible before build systems and implementations are introduced, while retaining the required runtime-process isolation.
+One reviewable change can keep canonical schemas, generated Rust/C++ code,
+native fixtures, resource staging, and desktop consumers consistent. Shared CI
+can exercise Debug and Release paths without publishing intermediate packages.
+Visible directory boundaries discourage accidental engine loading in the
+desktop process while avoiding premature repository/version coordination.
 
-## Alternatives Considered
+## Alternatives considered
 
 ### Separate repositories per component
 
-This would provide independent histories but would add coordination and versioning overhead before stable interfaces or release processes exist.
+Independent release histories would add package publication, compatibility
+matrices, and coordinated pull requests before the interfaces are mature. They
+would make atomic contract changes harder without improving process isolation.
 
 ### Nested `AI-Voice-Studio` repository
 
-This was rejected because the current Git root already contains the authoritative V1.0 architecture document and plans; a nested repository would split the project baseline and complicate tooling.
+The current Git root already contains the architecture and plans. A nested
+repository would split history, ignore rules, tooling, and CI ownership.
 
-### Single undifferentiated source directory
+### One undifferentiated source tree and build
 
-This was rejected because it would obscure ownership and encourage violations of the desktop, control-plane, runtime, and engine boundaries.
+A single directory or one language-centric build would obscure ownership and
+encourage direct Tauri-to-engine coupling. Separate modules and build graphs
+make the intended boundaries testable.
 
 ## Consequences
 
-- Cross-module changes can be reviewed and validated atomically in one repository.
-- Module ownership is established by top-level directories and will be refined through later ADRs and build configuration.
-- A monorepo does not remove runtime isolation: the native runtime remains a separately owned process boundary.
-- Repository-wide tooling and CI will eventually need to account for multiple languages and platforms.
+- Contract, implementation, fixture, packaging, and documentation changes can
+  be reviewed and validated together.
+- Root automation must coordinate Node/pnpm, Rust/Cargo, and CMake/Ninja and
+  keep their exact or minimum versions documented.
+- CI must cover macOS arm64 and Windows x64 rather than assuming one platform's
+  success transfers to the other. The workflow exists; real Windows execution
+  remains pending.
+- Directory co-location does not permit ownership shortcuts: Rust does not load
+  engine plugins, and native PCM does not cross RuntimeMessage or Tauri.
+- Reserved modules such as `audio`, `backend`, and `core/model-package` may
+  remain empty until an accepted decision and phase scope authorize behavior.

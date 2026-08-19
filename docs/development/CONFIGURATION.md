@@ -6,8 +6,8 @@
 shipped with the repository. `core/config` owns its Rust types, semantic bounds,
 and read-only byte/path loaders. The file is not a user-writable settings store.
 
-The packaged Desktop application will resolve the shipped file through its
-resource APIs and pass explicit bytes or an explicit absolute path. Neither the
+The packaged Desktop application resolves the shipped file through its
+resource APIs and passes explicit bytes or an explicit absolute path. Neither the
 configuration crate nor RuntimeManager searches the current working directory,
 home directory, environment, or platform settings folders. Runtime and plugin
 resource paths are deliberately absent from JSON: the Desktop resource owner
