@@ -34,7 +34,7 @@ function validVersion() {
     schema_version: 1,
     runtime: { version: "0.0.0" },
     ipc_protocol: { current_version: 1, minimum_compatible_version: 1 },
-    voice_engine_abi: { current_version: 1, minimum_compatible_version: 1 },
+    voice_engine_abi: { v1_version: 1, current_version: 1, minimum_compatible_version: 1 },
     compatibility_rule:
       "A peer is compatible if and only if its integer version is in the inclusive range [minimum_compatible_version, current_version].",
   };

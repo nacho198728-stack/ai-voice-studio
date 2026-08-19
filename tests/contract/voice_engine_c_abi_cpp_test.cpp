@@ -20,6 +20,7 @@ int main() {
   const aivs_prepare_stream_result_t prepare = AIVS_PREPARE_STREAM_RESULT_INIT;
   const aivs_reset_result_t reset = AIVS_RESET_RESULT_INIT;
 
+  assert(factory.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
   assert(factory.minimum_abi_version == AIVS_VOICE_ENGINE_ABI_MINIMUM_COMPATIBLE_VERSION);
   assert(factory.maximum_abi_version == AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION);
   assert(prepare.algorithmic_latency_frames == 0U);

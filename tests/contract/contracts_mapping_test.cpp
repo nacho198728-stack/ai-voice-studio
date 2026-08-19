@@ -13,6 +13,7 @@ int main() {
   assert(!is_ipc_protocol_compatible(2U));
   assert(kVoiceEngineAbiCurrentVersion == 1U);
   assert(kVoiceEngineAbiMinimumCompatibleVersion == 1U);
+  assert(kVoiceEngineAbiV1Version == 1U);
   assert(is_voice_engine_abi_compatible(1U));
   assert(!is_voice_engine_abi_compatible(0U));
 

@@ -9,8 +9,9 @@ mod tests {
     use super::{
         ErrorCategory, ErrorCode, IPC_PROTOCOL_CURRENT_VERSION,
         IPC_PROTOCOL_MINIMUM_COMPATIBLE_VERSION, RUNTIME_VERSION, VOICE_ENGINE_ABI_CURRENT_VERSION,
-        VOICE_ENGINE_ABI_MINIMUM_COMPATIBLE_VERSION, error_code_category, error_code_from_value,
-        is_ipc_protocol_compatible, is_voice_engine_abi_compatible,
+        VOICE_ENGINE_ABI_MINIMUM_COMPATIBLE_VERSION, VOICE_ENGINE_ABI_V1_VERSION,
+        error_code_category, error_code_from_value, is_ipc_protocol_compatible,
+        is_voice_engine_abi_compatible,
     };
 
     #[test]
@@ -23,6 +24,7 @@ mod tests {
         assert!(!is_ipc_protocol_compatible(2));
         assert_eq!(VOICE_ENGINE_ABI_CURRENT_VERSION, 1);
         assert_eq!(VOICE_ENGINE_ABI_MINIMUM_COMPATIBLE_VERSION, 1);
+        assert_eq!(VOICE_ENGINE_ABI_V1_VERSION, 1);
         assert!(is_voice_engine_abi_compatible(1));
         assert!(!is_voice_engine_abi_compatible(0));
     }

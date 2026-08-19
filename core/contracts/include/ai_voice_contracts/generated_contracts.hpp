@@ -14,6 +14,7 @@ inline constexpr std::uint32_t kErrorCodeSchemaVersion = 1U;
 inline constexpr std::string_view kRuntimeVersion = "0.0.0";
 inline constexpr std::uint32_t kIpcProtocolCurrentVersion = 1U;
 inline constexpr std::uint32_t kIpcProtocolMinimumCompatibleVersion = 1U;
+inline constexpr std::uint32_t kVoiceEngineAbiV1Version = 1U;
 inline constexpr std::uint32_t kVoiceEngineAbiCurrentVersion = 1U;
 inline constexpr std::uint32_t kVoiceEngineAbiMinimumCompatibleVersion = 1U;
 

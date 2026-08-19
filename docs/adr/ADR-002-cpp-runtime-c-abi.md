@@ -63,13 +63,13 @@ until successful shutdown destroys it. All buffers, including UTF-8 strings,
 PCM, and output capacity, remain caller-owned and use explicit byte or frame
 counts. UTF-8 is length-delimited and never requires a NUL terminator.
 
-Control operations are serialized per live handle and cannot overlap with
-processing. One caller at a time may invoke `process_audio` for a handle. After
+The Runtime serializes factory and initialize calls per module; independent
+handles may run concurrently. Control operations are serialized per live handle
+and cannot overlap with processing. One caller at a time may invoke `process_audio` for a handle. After
 successful `prepare_stream`, processing must not allocate, take a blocking
 lock, perform I/O, log, read environment state, or propagate an exception.
 `get_metrics` may run concurrently only with `process_audio`; it returns a
-nonblocking best-effort atomic-counter snapshot. Factory queries for separate
-plugins or handles are independent.
+nonblocking best-effort atomic-counter snapshot.
 
 ## Alternatives considered
 

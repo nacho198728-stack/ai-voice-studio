@@ -8,6 +8,7 @@
     "minimum_compatible_version": 1
   },
   "voice_engine_abi": {
+    "v1_version": 1,
     "current_version": 1,
     "minimum_compatible_version": 1
   },

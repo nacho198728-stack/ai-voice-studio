@@ -291,6 +291,21 @@ static inline aivs_bool_t aivs_voice_engine_api_v1_capacity_is_sufficient(uint32
   return capacity >= AIVS_VOICE_ENGINE_API_V1_SIZE ? AIVS_TRUE : AIVS_FALSE;
 }
 
+static inline void aivs_voice_engine_clear_factory_output(
+    aivs_voice_engine_api_t* output, uint32_t output_capacity_bytes) {
+  uint8_t* bytes = (uint8_t*)output;
+  uint32_t clear_size = output_capacity_bytes < AIVS_VOICE_ENGINE_API_V1_SIZE
+      ? output_capacity_bytes
+      : AIVS_VOICE_ENGINE_API_V1_SIZE;
+  uint32_t index;
+  if (bytes == NULL) {
+    return;
+  }
+  for (index = 0U; index < clear_size; ++index) {
+    bytes[index] = 0U;
+  }
+}
+
 static inline aivs_bool_t aivs_voice_engine_pcm_byte_count_is_addressable(
     uint64_t frame_count, uint32_t channel_count, uint64_t* byte_count) {
   uint64_t sample_count;
@@ -314,10 +329,77 @@ static inline aivs_bool_t aivs_voice_engine_pcm_byte_count_is_addressable(
   return AIVS_TRUE;
 }
 
-static inline aivs_bool_t aivs_voice_engine_api_v1_is_complete(
-    const aivs_voice_engine_api_t* api) {
+static inline aivs_bool_t aivs_voice_engine_pcm_pointers_match_counts(
+    const float* input_samples,
+    uint64_t input_frame_count,
+    const float* output_samples,
+    uint64_t output_frame_capacity) {
+  return (input_samples == NULL) == (input_frame_count == 0U)
+      && (output_samples == NULL) == (output_frame_capacity == 0U) ? AIVS_TRUE : AIVS_FALSE;
+}
+
+static inline aivs_bool_t aivs_voice_engine_pcm_ranges_are_compatible(
+    const float* input_samples, const float* output_samples, uint64_t byte_count) {
+  uintptr_t input_start;
+  uintptr_t output_start;
+  uintptr_t byte_count_as_pointer;
+  if (byte_count == 0U) {
+    return AIVS_TRUE;
+  }
+  if (input_samples == NULL || output_samples == NULL || byte_count > UINTPTR_MAX) {
+    return AIVS_FALSE;
+  }
+  input_start = (uintptr_t)input_samples;
+  output_start = (uintptr_t)output_samples;
+  byte_count_as_pointer = (uintptr_t)byte_count;
+  if (input_start > UINTPTR_MAX - byte_count_as_pointer
+      || output_start > UINTPTR_MAX - byte_count_as_pointer) {
+    return AIVS_FALSE;
+  }
+  if (input_start == output_start) {
+    return AIVS_TRUE;
+  }
+  return input_start + byte_count_as_pointer <= output_start
+      || output_start + byte_count_as_pointer <= input_start ? AIVS_TRUE : AIVS_FALSE;
+}
+
+static inline aivs_bool_t aivs_voice_engine_frame_capacity_is_sufficient(
+    uint64_t required_frame_count, uint64_t output_frame_capacity) {
+  return output_frame_capacity >= required_frame_count ? AIVS_TRUE : AIVS_FALSE;
+}
+
+static inline aivs_error_code_t aivs_voice_engine_generation_advance(
+    uint64_t current_generation, uint64_t* next_generation) {
+  if (next_generation == NULL) {
+    return AIVS_ERROR_INVALID_ARGUMENT;
+  }
+  *next_generation = 0U;
+  if (current_generation == UINT64_MAX) {
+    return AIVS_ERROR_INVALID_STATE;
+  }
+  *next_generation = current_generation + UINT64_C(1);
+  return AIVS_ERROR_SUCCESS;
+}
+
+static inline void aivs_voice_engine_process_result_set_failure(
+    aivs_process_audio_result_t* result,
+    aivs_error_code_t error,
+    uint64_t required_frame_count) {
+  if (result == NULL) {
+    return;
+  }
+  result->output.frames_written_or_required = error == AIVS_ERROR_BUFFER_TOO_SMALL
+      ? required_frame_count
+      : UINT64_C(0);
+  result->processed_frame_count = UINT64_C(0);
+  result->stream_generation = UINT64_C(0);
+}
+
+static inline aivs_bool_t aivs_voice_engine_api_is_complete_for_version(
+    const aivs_voice_engine_api_t* api, uint32_t selected_abi_version) {
   if (api == NULL || api->struct_size != AIVS_VOICE_ENGINE_API_V1_SIZE
-      || api->abi_version != AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION) {
+      || selected_abi_version != AIVS_VOICE_ENGINE_ABI_V1_VERSION
+      || api->abi_version != selected_abi_version) {
     return AIVS_FALSE;
   }
   if (api->reserved[0] != 0U || api->reserved[1] != 0U || api->reserved[2] != 0U
@@ -329,30 +411,35 @@ static inline aivs_bool_t aivs_voice_engine_api_v1_is_complete(
       && api->reset != NULL && api->get_metrics != NULL ? AIVS_TRUE : AIVS_FALSE;
 }
 
+static inline aivs_bool_t aivs_voice_engine_api_v1_is_complete(
+    const aivs_voice_engine_api_t* api) {
+  return aivs_voice_engine_api_is_complete_for_version(api, AIVS_VOICE_ENGINE_ABI_V1_VERSION);
+}
+
 #define AIVS_BYTES_VIEW_INIT \
-  { sizeof(aivs_bytes_view_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_bytes_view_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, NULL, UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_MUTABLE_BYTES_BUFFER_INIT \
-  { sizeof(aivs_mutable_bytes_buffer_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_mutable_bytes_buffer_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, NULL, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_PCM_BUFFER_INIT \
-  { sizeof(aivs_pcm_buffer_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, 0U, 0U, AIVS_PCM_FORMAT_FLOAT32, AIVS_PCM_LAYOUT_INTERLEAVED, UINT64_C(0), UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_pcm_buffer_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, NULL, 0U, 0U, AIVS_PCM_FORMAT_FLOAT32, AIVS_PCM_LAYOUT_INTERLEAVED, UINT64_C(0), UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_PCM_MUTABLE_BUFFER_INIT \
-  { sizeof(aivs_pcm_mutable_buffer_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, 0U, 0U, 0U, 0U, UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_pcm_mutable_buffer_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, NULL, 0U, 0U, 0U, 0U, UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_VOICE_ENGINE_FACTORY_REQUEST_INIT \
-  { sizeof(aivs_voice_engine_factory_request_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_VOICE_ENGINE_ABI_MINIMUM_COMPATIBLE_VERSION, AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_voice_engine_factory_request_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, AIVS_VOICE_ENGINE_ABI_MINIMUM_COMPATIBLE_VERSION, AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_INITIALIZE_REQUEST_INIT \
-  { sizeof(aivs_initialize_request_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_BYTES_VIEW_INIT, {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_initialize_request_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, AIVS_BYTES_VIEW_INIT, {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_INITIALIZE_RESULT_INIT \
-  { sizeof(aivs_initialize_result_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_initialize_result_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, NULL, {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_ENGINE_INFO_INIT \
-  { sizeof(aivs_engine_info_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_MUTABLE_BYTES_BUFFER_INIT, AIVS_MUTABLE_BYTES_BUFFER_INIT, {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_engine_info_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, AIVS_MUTABLE_BYTES_BUFFER_INIT, AIVS_MUTABLE_BYTES_BUFFER_INIT, {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_PREPARE_STREAM_REQUEST_INIT \
-  { sizeof(aivs_prepare_stream_request_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, 0U, 0U, AIVS_PCM_FORMAT_FLOAT32, AIVS_PCM_LAYOUT_INTERLEAVED, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_prepare_stream_request_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, 0U, 0U, AIVS_PCM_FORMAT_FLOAT32, AIVS_PCM_LAYOUT_INTERLEAVED, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_PREPARE_STREAM_RESULT_INIT \
-  { sizeof(aivs_prepare_stream_result_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_prepare_stream_result_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_PROCESS_AUDIO_RESULT_INIT \
-  { sizeof(aivs_process_audio_result_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_PCM_MUTABLE_BUFFER_INIT, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_process_audio_result_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, AIVS_PCM_MUTABLE_BUFFER_INIT, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_RESET_RESULT_INIT \
-  { sizeof(aivs_reset_result_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_reset_result_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_VOICE_ENGINE_API_OUTPUT_INIT \
   { AIVS_VOICE_ENGINE_API_V1_SIZE, 0U, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, {UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(0)} }
 
@@ -362,11 +449,13 @@ static inline aivs_bool_t aivs_voice_engine_api_v1_is_complete(
  * return; out_api->abi_version is zero on entry and selected on success. */
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_voice_engine_get_api_fn)(
     const aivs_voice_engine_factory_request_t* request,
-    aivs_voice_engine_api_t* out_api);
+    aivs_voice_engine_api_t* out_api,
+    uint32_t out_api_capacity_bytes);
 
 AIVS_VOICE_ENGINE_API aivs_error_code_t AIVS_VOICE_ENGINE_CALL aivs_voice_engine_get_api(
     const aivs_voice_engine_factory_request_t* request,
-    aivs_voice_engine_api_t* out_api);
+    aivs_voice_engine_api_t* out_api,
+    uint32_t out_api_capacity_bytes);
 
 #if defined(__cplusplus)
 }  // extern "C"
