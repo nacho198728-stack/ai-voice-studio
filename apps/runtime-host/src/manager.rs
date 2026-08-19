@@ -1298,6 +1298,25 @@ struct ProcessResources {
     exit_drain_deadline: Option<Instant>,
 }
 
+impl Drop for ProcessResources {
+    fn drop(&mut self) {
+        // Actor cancellation can bypass the async reap path (for example when
+        // its owning Tokio runtime is destroyed). kill_on_drop terminates but
+        // does not wait on POSIX, so retain a bounded synchronous reap barrier.
+        if self.child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        let _ = self.child.start_kill();
+        let deadline = std::time::Instant::now() + REAP_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            match self.child.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+    }
+}
+
 struct StartContext {
     deadline: Instant,
     reply: oneshot::Sender<Result<RuntimeStatus, ManagerError>>,
@@ -2156,15 +2175,15 @@ impl Actor {
         }
         if !stdout_done {
             process.stdout_task.abort();
-            let _ = process.stdout_task.await;
+            let _ = (&mut process.stdout_task).await;
         }
         if !stderr_done {
             process.stderr_task.abort();
-            let _ = process.stderr_task.await;
+            let _ = (&mut process.stderr_task).await;
         }
         if !writer_done {
             process.writer_task.abort();
-            let _ = process.writer_task.await;
+            let _ = (&mut process.writer_task).await;
         }
         self.state.stderr_tail = process.stderr_tail.lock().await.snapshot();
         self.state.pid = None;

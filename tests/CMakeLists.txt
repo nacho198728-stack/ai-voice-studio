@@ -276,6 +276,30 @@ set_tests_properties(
 )
 
 add_test(
+  NAME aivs_runtime_manager_gate_test
+  COMMAND
+    ${CMAKE_COMMAND} -E env
+    AIVS_RUNTIME_PATH=$<TARGET_FILE:voice-runtime>
+    AIVS_MOCK_PLUGIN_PATH=$<TARGET_FILE:aivs_mock_voice_engine>
+    AIVS_RUNTIME_FIXTURE_PATH=$<TARGET_FILE:aivs_runtime_manager_child_fixture>
+    CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/rust-target
+    ${AIVS_CARGO_EXECUTABLE} test
+    --locked
+    -p ai-voice-runtime-host
+    --test runtime_manager_gate
+    --
+    --ignored
+    --nocapture
+    --test-threads=1
+)
+set_tests_properties(
+  aivs_runtime_manager_gate_test
+  PROPERTIES
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    TIMEOUT 90
+)
+
+add_test(
   NAME aivs_desktop_exit_runtime_race_test
   COMMAND
     ${CMAKE_COMMAND} -E env

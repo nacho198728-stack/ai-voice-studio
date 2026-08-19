@@ -36,6 +36,7 @@ constexpr std::string_view kHello =
 constexpr std::string_view kCapabilities =
     R"({"platform":"unknown","architecture":"unknown","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"})";
 std::string g_executable_path;
+std::uint64_t g_generation = 1U;
 
 std::vector<std::uint8_t> bytes(std::string_view value) {
   return {value.begin(), value.end()};
@@ -102,6 +103,20 @@ void close_stdout() {
 #else
   ::close(STDOUT_FILENO);
 #endif
+}
+
+void close_stdin() {
+#if defined(_WIN32)
+  ::_close(::_fileno(stdin));
+#else
+  ::close(STDIN_FILENO);
+#endif
+}
+
+void write_u32(std::vector<std::uint8_t>& frame, std::size_t offset, std::uint32_t value) {
+  for (std::size_t index = 0U; index < 4U; ++index) {
+    frame[offset + index] = static_cast<std::uint8_t>(value >> (index * 8U));
+  }
 }
 
 [[noreturn]] void hang() {
@@ -233,9 +248,45 @@ std::optional<std::string> mode_from_arguments(int argc, char** argv) {
   return std::nullopt;
 }
 
+std::optional<std::uint64_t> generation_from_arguments(int argc, char** argv) {
+  if (argv == nullptr) {
+    return std::nullopt;
+  }
+  for (int index = 1; index + 1 < argc; ++index) {
+    if (std::string_view(argv[index]) == "--generation") {
+      try {
+        return std::stoull(argv[index + 1]);
+      } catch (...) {
+        return std::nullopt;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 int run_loop(std::string_view mode) {
+  if (mode == "stderr-flood") {
+    constexpr std::array<char, 4'096> kFlood{};
+    for (std::size_t index = 0U; index < 256U; ++index) {
+      if (std::fwrite(kFlood.data(), 1U, kFlood.size(), stderr) != kFlood.size()) {
+        return 8;
+      }
+    }
+    std::fputs("stderr-flood-complete\n", stderr);
+    std::fflush(stderr);
+  }
   if (!send(hello())) {
     return 3;
+  }
+  if (mode == "stdin-close-hang") {
+    close_stdin();
+    std::fputs("stdin-closed\n", stderr);
+    std::fflush(stderr);
+    hang();
+  }
+  if (mode == "exit-nonzero") {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    return 7;
   }
   if (mode == "exit-descendant") {
     if (!spawn_holder_descendant()) {
@@ -300,6 +351,50 @@ int run_loop(std::string_view mode) {
           }
           hang();
         }
+        if (mode == "response-unknown-id") {
+          auto unknown = response(request, message::Command::Ping, request.payload);
+          ++unknown.request_id;
+          if (!send(unknown)) {
+            return 3;
+          }
+          hang();
+        }
+        if (mode == "response-duplicate") {
+          const auto duplicate = response(request, message::Command::Ping, request.payload);
+          if (!send(duplicate) || !send(duplicate)) {
+            return 3;
+          }
+          hang();
+        }
+        if (mode == "posthello-request") {
+          const message::RuntimeMessage wrong{
+              message::MessageKind::Request,
+              ai_voice::contracts::kIpcProtocolCurrentVersion,
+              request.request_id,
+              message::Command::Ping,
+              ErrorCode::Success,
+              {},
+          };
+          if (!send(wrong)) {
+            return 3;
+          }
+          hang();
+        }
+        if (mode == "posthello-hello") {
+          if (!send(hello())) {
+            return 3;
+          }
+          hang();
+        }
+        if (mode == "stale-responses" && g_generation == 1U) {
+          for (std::size_t index = 0U; index < 100U; ++index) {
+            if (!send(response(
+                    request, message::Command::GetCapabilities, bytes(kCapabilities)))) {
+              return 3;
+            }
+          }
+          hang();
+        }
         if (mode == "environment") {
           const auto clean = std::getenv("AIVS_TEST_SECRET") == nullptr;
           if (!send(response(
@@ -321,6 +416,12 @@ int run_loop(std::string_view mode) {
             return 3;
           }
           continue;
+        }
+        if (mode == "malformed-capabilities") {
+          if (!send(response(request, request.command, bytes("{}")))) {
+            return 3;
+          }
+          hang();
         }
         if (!send(response(request, request.command, bytes(kCapabilities)))) {
           return 3;
@@ -371,6 +472,9 @@ int main(int argc, char** argv) {
   if (argc > 0 && argv != nullptr) {
     g_executable_path = argv[0];
   }
+  if (const auto generation = generation_from_arguments(argc, argv); generation.has_value()) {
+    g_generation = *generation;
+  }
   const auto mode = mode_from_arguments(argc, argv);
   if (!mode.has_value()) {
     return 4;
@@ -406,6 +510,38 @@ int main(int argc, char** argv) {
       return 3;
     }
     close_stdout();
+    hang();
+  }
+  if (*mode == "prehello-malformed-frame" || *mode == "prehello-oversized-frame" ||
+      *mode == "prehello-wrong-version") {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    auto encoded = message::encode(hello());
+    if (encoded.error.has_value()) {
+      return 3;
+    }
+    if (*mode == "prehello-malformed-frame") {
+      encoded.bytes[0] = static_cast<std::uint8_t>('X');
+    } else if (*mode == "prehello-oversized-frame") {
+      write_u32(
+          encoded.bytes,
+          28U,
+          static_cast<std::uint32_t>(message::kMaxHelloPayloadBytes + 1U));
+    } else {
+      write_u32(
+          encoded.bytes, 8U, ai_voice::contracts::kIpcProtocolCurrentVersion + 1U);
+    }
+    if (!write_bytes(encoded.bytes)) {
+      return 3;
+    }
+    hang();
+  }
+  if (*mode == "prehello-malformed-payload") {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    auto malformed = hello();
+    malformed.payload = bytes("{");
+    if (!send(malformed)) {
+      return 3;
+    }
     hang();
   }
   if (*mode == "stderr-exit") {
