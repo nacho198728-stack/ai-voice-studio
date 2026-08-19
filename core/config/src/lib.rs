@@ -295,10 +295,15 @@ fn is_portable_path_component(component: &str) -> bool {
     if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$") {
         return false;
     }
-    let bytes = stem.as_bytes();
-    !((bytes.starts_with(b"COM") || bytes.starts_with(b"LPT"))
-        && bytes.len() == 4
-        && matches!(bytes[3], b'1'..=b'9'))
+    let reserved_numbered_device = ["COM", "LPT"].iter().any(|prefix| {
+        stem.strip_prefix(prefix).is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
+    });
+    !reserved_numbered_device
 }
 
 fn validate_inclusive(
