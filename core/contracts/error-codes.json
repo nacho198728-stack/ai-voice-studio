@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "numeric_ranges": [
+    {
+      "name": "success",
+      "start": 0,
+      "end": 0
+    },
+    {
+      "name": "version",
+      "start": 1000,
+      "end": 1099
+    },
+    {
+      "name": "framing",
+      "start": 1100,
+      "end": 1199
+    },
+    {
+      "name": "runtime",
+      "start": 1200,
+      "end": 1299
+    },
+    {
+      "name": "engine",
+      "start": 1300,
+      "end": 1399
+    },
+    {
+      "name": "internal",
+      "start": 1900,
+      "end": 1999
+    }
+  ],
+  "codes": [
+    {
+      "name": "Success",
+      "value": 0,
+      "category": "success",
+      "meaning": "The operation completed successfully."
+    },
+    {
+      "name": "UnsupportedProtocolVersion",
+      "value": 1000,
+      "category": "version",
+      "meaning": "The peer IPC protocol version is incompatible."
+    },
+    {
+      "name": "UnsupportedVoiceEngineAbi",
+      "value": 1001,
+      "category": "version",
+      "meaning": "The VoiceEngine ABI version is incompatible."
+    },
+    {
+      "name": "MalformedFrame",
+      "value": 1100,
+      "category": "framing",
+      "meaning": "The received control frame is malformed."
+    },
+    {
+      "name": "FrameTooLarge",
+      "value": 1101,
+      "category": "framing",
+      "meaning": "The received control frame exceeds the configured limit."
+    },
+    {
+      "name": "RuntimeUnavailable",
+      "value": 1200,
+      "category": "runtime",
+      "meaning": "The isolated runtime is unavailable."
+    },
+    {
+      "name": "RuntimeShuttingDown",
+      "value": 1201,
+      "category": "runtime",
+      "meaning": "The isolated runtime is shutting down."
+    },
+    {
+      "name": "EngineUnavailable",
+      "value": 1300,
+      "category": "engine",
+      "meaning": "No compatible VoiceEngine is available."
+    },
+    {
+      "name": "InternalError",
+      "value": 1900,
+      "category": "internal",
+      "meaning": "An unexpected internal boundary failure occurred."
+    }
+  ]
+}

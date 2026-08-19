@@ -1,2 +1,4 @@
-# Reserved for native contract, integration, and benchmark tests. No empty
-# tests are registered while this build graph contains only ownership wiring.
+add_executable(aivs_contract_mapping_test contract/contracts_mapping_test.cpp)
+target_link_libraries(aivs_contract_mapping_test PRIVATE ai_voice_contracts)
+
+add_test(NAME aivs_contract_mapping_test COMMAND aivs_contract_mapping_test)
