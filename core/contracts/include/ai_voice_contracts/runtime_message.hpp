@@ -294,6 +294,7 @@ class Decoder {
             result.error = fail(*parsed.error);
             return result;
           }
+          buffer_.reserve(kHeaderSize + parsed.header->payload_length);
           header_ = parsed.header;
         }
 

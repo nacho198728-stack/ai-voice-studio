@@ -119,7 +119,10 @@ impl Decoder {
                     break;
                 }
                 match parse_header(&self.buffer) {
-                    Ok(header) => self.header = Some(header),
+                    Ok(header) => {
+                        self.buffer.reserve_exact(header.payload_length);
+                        self.header = Some(header);
+                    }
                     Err(error) => return Err(self.fail(error)),
                 }
             }

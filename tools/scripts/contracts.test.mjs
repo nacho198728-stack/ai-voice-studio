@@ -195,14 +195,24 @@ test("check rejects malformed RuntimeMessage layout and limits", (t) => {
   assert.match(runFailure(unstableAllocationFailureRoot, "generate"), /allocation_failure/);
 });
 
-test("check detects stale generated output without rewriting it", (t) => {
+test("check detects drift in every generated protocol artifact without rewriting it", (t) => {
   const root = fixture(t);
   run(root, "generate");
-  const rustPath = path.join(root, "core/contracts/src/generated.rs");
-  writeFileSync(rustPath, "stale mapping\n");
+  const generatedPaths = [
+    "core/contracts/src/generated.rs",
+    "core/contracts/src/runtime_message_generated.rs",
+    "core/contracts/include/ai_voice_contracts/generated_contracts.hpp",
+    "core/contracts/include/ai_voice_contracts/generated_contracts_c.h",
+    "core/contracts/include/ai_voice_contracts/runtime_message_generated.hpp",
+  ].map((relativePath) => path.join(root, relativePath));
 
-  assert.match(runFailure(root, "check"), /generated mapping drift/);
-  assert.equal(readFileSync(rustPath, "utf8"), "stale mapping\n");
+  for (const generatedPath of generatedPaths) {
+    const current = readFileSync(generatedPath, "utf8");
+    writeFileSync(generatedPath, "stale mapping\n");
+    assert.match(runFailure(root, "check"), /generated mapping drift/);
+    assert.equal(readFileSync(generatedPath, "utf8"), "stale mapping\n");
+    writeFileSync(generatedPath, current);
+  }
 });
 
 test("preserves frozen v1 mappings after active compatibility advances", (t) => {

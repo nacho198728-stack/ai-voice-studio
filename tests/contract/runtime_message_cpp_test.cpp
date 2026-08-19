@@ -194,6 +194,21 @@ void chunking_sticky_and_eof() {
   assert(messages.size() == 1U);
   assert(!bytewise.finish().has_value());
 
+  const auto maximum = message::encode(request(
+      message::Command::RunMockPipeline,
+      std::vector<std::uint8_t>(message::kMaxControlPayloadBytes)));
+  assert(!maximum.error.has_value());
+  message::Decoder maximum_bytewise;
+  std::vector<message::RuntimeMessage> maximum_messages;
+  for (const auto byte : maximum.bytes) {
+    const auto result = maximum_bytewise.feed(std::span<const std::uint8_t>(&byte, 1U));
+    assert(!result.error.has_value());
+    maximum_messages.insert(
+        maximum_messages.end(), result.messages.begin(), result.messages.end());
+    assert(maximum_bytewise.buffered_capacity() <= message::kMaxFrameBytes);
+  }
+  assert(maximum_messages.size() == 1U);
+
   message::Decoder sticky;
   auto combined = bytes;
   combined.insert(combined.end(), bytes.begin(), bytes.end());
