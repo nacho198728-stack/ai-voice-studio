@@ -125,3 +125,24 @@ Engine, IPC, Rust FFI, Tauri integration, device access, or model execution.
 ### Review-fix commit
 
 - `22425f1` — `fix(runtime): complete VoiceEngine ABI v1 contract`
+
+## Review fix round 2
+
+- Added canonical immutable `voice_engine_abi.v1_version` and generated C/Rust/
+  C++ mappings. All v1 initializers, factory request structure version, and v1
+  completeness use it rather than mutable current version.
+- Factory capacity is now an explicit argument. A public bounded-clear helper
+  defines exact failure writes for every error class; C canary tests cover null,
+  zero, below-prefix, prefix, mid-slot, v1-minus-one, v1, and larger capacity.
+- Added header-owned process failure, generation advance, pointer/count,
+  range-compatibility, and capacity helpers. Tests cover future `[1,2]` to v1
+  fallback, v1-vs-v2 table shape, result reset behavior, generation exhaustion,
+  exact/partial/disjoint overlap, wrap, and undersized capacity.
+- The ABI contract now makes all process failures atomic, generations monotonic
+  and non-reusing, and accessible-storage responsibility caller-owned. ADR-002
+  now matches per-module factory/initialize serialization and independent
+  handles.
+
+### Review-fix commit
+
+- `4ca0e78` — `fix(runtime): freeze VoiceEngine ABI v1 contract`
