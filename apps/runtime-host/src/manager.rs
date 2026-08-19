@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai_voice_capability::{
-    CapabilityEvaluation, CapabilityProfile, CapabilityProfileError, ManagerCapability,
-    ManagerHealth, NativeRuntimeCapabilities, RuntimeBackend,
+    Architecture, CAPABILITY_SCHEMA_VERSION, CapabilityAvailability, EngineIdentity,
+    NativeRuntimeCapabilities, Platform, RuntimeBackend,
 };
 use ai_voice_config::{
     BackendKind, MAX_MOCK_WORK_ITERATIONS, MAX_RUNTIME_IN_FLIGHT, MAX_RUNTIME_QUEUE_CAPACITY,
@@ -17,7 +17,8 @@ use ai_voice_config::{
 use ai_voice_contracts::runtime_message::{
     Command, Decoder, MAX_PING_PAYLOAD_BYTES, MessageKind, RuntimeMessage, encode,
 };
-use ai_voice_contracts::{ErrorCode, IPC_PROTOCOL_CURRENT_VERSION};
+use ai_voice_contracts::{ErrorCode, IPC_PROTOCOL_CURRENT_VERSION, RUNTIME_VERSION};
+use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -276,15 +277,238 @@ impl CapabilityObservation {
             | CapabilityObservationOutcome::Observed(_) => None,
         }
     }
+}
 
-    fn evaluation(&self) -> CapabilityEvaluation {
-        match &self.outcome {
-            CapabilityObservationOutcome::NotEvaluated => CapabilityEvaluation::not_evaluated(),
-            CapabilityObservationOutcome::Inconclusive(_) => CapabilityEvaluation::inconclusive(),
-            CapabilityObservationOutcome::Observed(capabilities) => {
-                CapabilityEvaluation::observed(capabilities.clone())
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagerHealth {
+    Stopped,
+    Starting,
+    Connected,
+    Stopping,
+    Crashed,
+    Error,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ManagerCapability {
+    health: ManagerHealth,
+    generation: u64,
+}
+
+impl ManagerCapability {
+    pub const fn health(&self) -> ManagerHealth {
+        self.health
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CapabilityProfileError {
+    InvalidManagerGeneration,
+    StaleObservation {
+        manager_generation: u64,
+        observation_generation: u64,
+    },
+    ObservationNotAllowed {
+        health: ManagerHealth,
+    },
+}
+
+impl fmt::Display for CapabilityProfileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidManagerGeneration => {
+                formatter.write_str("non-stopped manager generation must be nonzero")
             }
+            Self::StaleObservation {
+                manager_generation,
+                observation_generation,
+            } => write!(
+                formatter,
+                "capability observation generation {observation_generation} does not match manager generation {manager_generation}"
+            ),
+            Self::ObservationNotAllowed { health } => write!(
+                formatter,
+                "capability query observation is invalid while manager is {health:?}"
+            ),
         }
+    }
+}
+
+impl std::error::Error for CapabilityProfileError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RuntimeCapability {
+    version: String,
+    protocol_version: u32,
+    backend: RuntimeBackend,
+    availability: CapabilityAvailability,
+}
+
+impl RuntimeCapability {
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub const fn protocol_version(&self) -> u32 {
+        self.protocol_version
+    }
+
+    pub const fn backend(&self) -> RuntimeBackend {
+        self.backend
+    }
+
+    pub const fn availability(&self) -> CapabilityAvailability {
+        self.availability
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct EngineCapability {
+    identity: Option<EngineIdentity>,
+    availability: CapabilityAvailability,
+}
+
+impl EngineCapability {
+    pub const fn identity(&self) -> Option<EngineIdentity> {
+        self.identity
+    }
+
+    pub const fn availability(&self) -> CapabilityAvailability {
+        self.availability
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CapabilityProfile {
+    schema_version: u32,
+    platform: Platform,
+    architecture: Architecture,
+    runtime: RuntimeCapability,
+    engine: EngineCapability,
+    manager: ManagerCapability,
+}
+
+impl CapabilityProfile {
+    fn from_actor_observation(
+        configured_backend: RuntimeBackend,
+        health: ManagerHealth,
+        generation: u64,
+        observation: &CapabilityObservation,
+    ) -> Result<Self, CapabilityProfileError> {
+        if health != ManagerHealth::Stopped && generation == 0 {
+            return Err(CapabilityProfileError::InvalidManagerGeneration);
+        }
+        if health != ManagerHealth::Connected
+            && !matches!(
+                observation.outcome,
+                CapabilityObservationOutcome::NotEvaluated
+            )
+        {
+            return Err(CapabilityProfileError::ObservationNotAllowed { health });
+        }
+
+        let configured_identity = match configured_backend {
+            RuntimeBackend::Mock => Some(EngineIdentity::AivsMockV1),
+            RuntimeBackend::Unavailable => None,
+        };
+        let (platform, architecture, backend, runtime_availability, identity, engine_availability) =
+            match health {
+                ManagerHealth::Starting => (
+                    Platform::Unknown,
+                    Architecture::Unknown,
+                    configured_backend,
+                    CapabilityAvailability::NotEvaluated,
+                    configured_identity,
+                    CapabilityAvailability::NotEvaluated,
+                ),
+                ManagerHealth::Connected => match &observation.outcome {
+                    CapabilityObservationOutcome::NotEvaluated => (
+                        Platform::Unknown,
+                        Architecture::Unknown,
+                        configured_backend,
+                        CapabilityAvailability::Available,
+                        configured_identity,
+                        CapabilityAvailability::NotEvaluated,
+                    ),
+                    CapabilityObservationOutcome::Inconclusive(_) => (
+                        Platform::Unknown,
+                        Architecture::Unknown,
+                        configured_backend,
+                        CapabilityAvailability::Available,
+                        configured_identity,
+                        CapabilityAvailability::Unknown,
+                    ),
+                    CapabilityObservationOutcome::Observed(native) => (
+                        native.platform(),
+                        native.architecture(),
+                        native.backend(),
+                        CapabilityAvailability::Available,
+                        native.engine_identity(),
+                        if native.engine_identity().is_some() {
+                            CapabilityAvailability::Available
+                        } else {
+                            CapabilityAvailability::Unavailable
+                        },
+                    ),
+                },
+                ManagerHealth::Stopped
+                | ManagerHealth::Stopping
+                | ManagerHealth::Crashed
+                | ManagerHealth::Error => (
+                    Platform::Unknown,
+                    Architecture::Unknown,
+                    configured_backend,
+                    CapabilityAvailability::Unavailable,
+                    configured_identity,
+                    CapabilityAvailability::Unavailable,
+                ),
+            };
+
+        Ok(Self {
+            schema_version: CAPABILITY_SCHEMA_VERSION,
+            platform,
+            architecture,
+            runtime: RuntimeCapability {
+                version: RUNTIME_VERSION.to_owned(),
+                protocol_version: IPC_PROTOCOL_CURRENT_VERSION,
+                backend,
+                availability: runtime_availability,
+            },
+            engine: EngineCapability {
+                identity,
+                availability: engine_availability,
+            },
+            manager: ManagerCapability { health, generation },
+        })
+    }
+
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    pub const fn platform(&self) -> Platform {
+        self.platform
+    }
+
+    pub const fn architecture(&self) -> Architecture {
+        self.architecture
+    }
+
+    pub const fn runtime(&self) -> &RuntimeCapability {
+        &self.runtime
+    }
+
+    pub const fn engine(&self) -> &EngineCapability {
+        &self.engine
+    }
+
+    pub const fn manager(&self) -> &ManagerCapability {
+        &self.manager
     }
 }
 
@@ -501,20 +725,18 @@ impl RuntimeStatus {
         let configured_backend = match product.backend().kind() {
             BackendKind::Mock => RuntimeBackend::Mock,
         };
-        CapabilityProfile::from_evaluation(
+        CapabilityProfile::from_actor_observation(
             configured_backend,
-            ManagerCapability::new(
-                match self.state {
-                    RuntimeState::Stopped => ManagerHealth::Stopped,
-                    RuntimeState::Starting => ManagerHealth::Starting,
-                    RuntimeState::Connected => ManagerHealth::Connected,
-                    RuntimeState::Stopping => ManagerHealth::Stopping,
-                    RuntimeState::Crashed => ManagerHealth::Crashed,
-                    RuntimeState::Error => ManagerHealth::Error,
-                },
-                self.generation,
-            )?,
-            &observation.evaluation(),
+            match self.state {
+                RuntimeState::Stopped => ManagerHealth::Stopped,
+                RuntimeState::Starting => ManagerHealth::Starting,
+                RuntimeState::Connected => ManagerHealth::Connected,
+                RuntimeState::Stopping => ManagerHealth::Stopping,
+                RuntimeState::Crashed => ManagerHealth::Crashed,
+                RuntimeState::Error => ManagerHealth::Error,
+            },
+            self.generation,
+            observation,
         )
     }
 }
@@ -2010,6 +2232,35 @@ mod tests {
 
     use super::*;
 
+    const MOCK_NATIVE: &[u8] = br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#;
+    const UNAVAILABLE_NATIVE: &[u8] = br#"{"platform":"windows","architecture":"x86_64","runtime_version":"0.0.0","protocol_version":1,"backend":"unavailable","engine":"unavailable"}"#;
+
+    #[derive(Clone, Copy)]
+    enum TestObservation {
+        NotEvaluated,
+        Inconclusive,
+        Mock,
+        Unavailable,
+    }
+
+    fn test_observation(kind: TestObservation, generation: u64) -> CapabilityObservation {
+        match kind {
+            TestObservation::NotEvaluated => CapabilityObservation::not_evaluated(generation),
+            TestObservation::Inconclusive => CapabilityObservation::inconclusive(
+                generation,
+                ManagerError::unavailable("controlled inconclusive query"),
+            ),
+            TestObservation::Mock => CapabilityObservation::observed(
+                generation,
+                NativeRuntimeCapabilities::from_canonical_json(MOCK_NATIVE).unwrap(),
+            ),
+            TestObservation::Unavailable => CapabilityObservation::observed(
+                generation,
+                NativeRuntimeCapabilities::from_canonical_json(UNAVAILABLE_NATIVE).unwrap(),
+            ),
+        }
+    }
+
     fn canonical_test_hello() -> Hello {
         Hello {
             runtime_version: "0.0.0".to_owned(),
@@ -2030,6 +2281,139 @@ mod tests {
             }
         }
         panic!("controlled stdin pipe never became full");
+    }
+
+    #[test]
+    fn literal_profile_truth_table_covers_every_manager_state_and_query_outcome() {
+        let cases = [
+            (
+                "stopped",
+                ManagerHealth::Stopped,
+                0,
+                TestObservation::NotEvaluated,
+                r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"stopped","generation":0}}"#,
+            ),
+            (
+                "starting",
+                ManagerHealth::Starting,
+                1,
+                TestObservation::NotEvaluated,
+                r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"not_evaluated"},"engine":{"identity":"aivs-mock-v1","availability":"not_evaluated"},"manager":{"health":"starting","generation":1}}"#,
+            ),
+            (
+                "connected-not-evaluated",
+                ManagerHealth::Connected,
+                1,
+                TestObservation::NotEvaluated,
+                r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"not_evaluated"},"manager":{"health":"connected","generation":1}}"#,
+            ),
+            (
+                "connected-inconclusive",
+                ManagerHealth::Connected,
+                1,
+                TestObservation::Inconclusive,
+                r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"unknown"},"manager":{"health":"connected","generation":1}}"#,
+            ),
+            (
+                "connected-mock",
+                ManagerHealth::Connected,
+                1,
+                TestObservation::Mock,
+                r#"{"schema_version":1,"platform":"macos","architecture":"arm64","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"available"},"manager":{"health":"connected","generation":1}}"#,
+            ),
+            (
+                "connected-unavailable-engine",
+                ManagerHealth::Connected,
+                1,
+                TestObservation::Unavailable,
+                r#"{"schema_version":1,"platform":"windows","architecture":"x86_64","runtime":{"version":"0.0.0","protocol_version":1,"backend":"unavailable","availability":"available"},"engine":{"identity":null,"availability":"unavailable"},"manager":{"health":"connected","generation":1}}"#,
+            ),
+            (
+                "stopping",
+                ManagerHealth::Stopping,
+                1,
+                TestObservation::NotEvaluated,
+                r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"stopping","generation":1}}"#,
+            ),
+            (
+                "crashed",
+                ManagerHealth::Crashed,
+                1,
+                TestObservation::NotEvaluated,
+                r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"crashed","generation":1}}"#,
+            ),
+            (
+                "error",
+                ManagerHealth::Error,
+                1,
+                TestObservation::NotEvaluated,
+                r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"error","generation":1}}"#,
+            ),
+        ];
+
+        for (name, health, generation, observation, expected) in cases {
+            let observation = test_observation(observation, generation);
+            let profile = CapabilityProfile::from_actor_observation(
+                RuntimeBackend::Mock,
+                health,
+                generation,
+                &observation,
+            )
+            .unwrap();
+            assert_eq!(serde_json::to_string(&profile).unwrap(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn profile_builder_rejects_invalid_internal_state_and_omits_hardware_claims() {
+        let observation = test_observation(TestObservation::NotEvaluated, 0);
+        assert_eq!(
+            CapabilityProfile::from_actor_observation(
+                RuntimeBackend::Mock,
+                ManagerHealth::Connected,
+                0,
+                &observation,
+            )
+            .unwrap_err(),
+            CapabilityProfileError::InvalidManagerGeneration
+        );
+
+        let inconclusive = test_observation(TestObservation::Inconclusive, 1);
+        assert_eq!(
+            CapabilityProfile::from_actor_observation(
+                RuntimeBackend::Mock,
+                ManagerHealth::Crashed,
+                1,
+                &inconclusive,
+            )
+            .unwrap_err(),
+            CapabilityProfileError::ObservationNotAllowed {
+                health: ManagerHealth::Crashed,
+            }
+        );
+
+        let native = test_observation(TestObservation::Mock, 7);
+        let profile = CapabilityProfile::from_actor_observation(
+            RuntimeBackend::Mock,
+            ManagerHealth::Connected,
+            7,
+            &native,
+        )
+        .unwrap();
+        let serialized = serde_json::to_string(&profile).unwrap();
+        for forbidden in [
+            "cpu",
+            "gpu",
+            "ram",
+            "npu",
+            "audio",
+            "device",
+            "driver",
+            "benchmark",
+            "machine",
+        ] {
+            assert!(!serialized.contains(forbidden));
+        }
     }
 
     #[cfg(unix)]

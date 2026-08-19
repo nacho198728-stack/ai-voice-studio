@@ -33,13 +33,14 @@ to surface an error; it must not silently continue with implicit defaults.
 
 `core/capability` normalizes the native Runtime payload against canonical
 versions from `core/contracts` and only accepts the paired native claims
-`mock/aivs-mock-v1` or `unavailable/unavailable`. A capability profile records
-manager health/generation and distinguishes available, unavailable, unknown,
-and not-evaluated values. Capability queries are modeled as not evaluated,
-inconclusive, or observed; every observation is bound to a manager generation,
-and stale observations are rejected after restart. A connected Runtime is
-available independently of whether the native payload reports the Mock engine
-available or unavailable.
+`mock/aivs-mock-v1` or `unavailable/unavailable`. It has no generation-bearing
+profile constructor. RuntimeHost privately maps actor-minted observations into
+the serialized capability profile, which records manager health/generation and
+distinguishes available, unavailable, unknown, and not-evaluated values.
+Capability queries are modeled as not evaluated, inconclusive, or observed;
+every observation is bound to a manager generation, and stale observations are
+rejected after restart. A connected Runtime is available independently of
+whether the native payload reports the Mock engine available or unavailable.
 
 No capability path reads CPU, GPU, RAM, NPU, audio devices, drivers, benchmark
 tiers, or machine identifiers. Unknown platform/architecture remains `unknown`;

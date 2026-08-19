@@ -30,19 +30,41 @@
 //! let forged_not_evaluated = CapabilityObservation::not_evaluated(2);
 //! # let _ = (rebound_failure, forged_not_evaluated);
 //! ```
+//!
+//! A copied native result cannot bypass the opaque host observation by using a
+//! lower-level profile constructor with a caller-selected generation.
+//!
+//! ```compile_fail
+//! use ai_voice_capability::{
+//!     CapabilityEvaluation, CapabilityProfile, ManagerCapability, ManagerHealth,
+//!     NativeRuntimeCapabilities, RuntimeBackend,
+//! };
+//!
+//! let copied_old_native = NativeRuntimeCapabilities::from_canonical_json(
+//!     br#"{"platform":"unknown","architecture":"unknown","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#,
+//! ).unwrap();
+//! let caller_generation = ManagerCapability::new(ManagerHealth::Connected, 2).unwrap();
+//! let relabeled = CapabilityEvaluation::observed(copied_old_native);
+//! let forged = CapabilityProfile::from_evaluation(
+//!     RuntimeBackend::Mock,
+//!     caller_generation,
+//!     &relabeled,
+//! ).unwrap();
+//! # let _ = forged;
+//! ```
 
 mod manager;
 mod payload;
 
 pub use ai_voice_capability::{
-    Architecture, CapabilityAvailability, CapabilityProfile, CapabilityProfileError,
-    EngineCapability, EngineIdentity, ManagerCapability, ManagerHealth, NativeCapabilityError,
+    Architecture, CapabilityAvailability, EngineIdentity, NativeCapabilityError,
     NativeCapabilityMismatch, NativeRuntimeCapabilities as RuntimeCapabilities, Platform,
-    RuntimeBackend, RuntimeCapability,
+    RuntimeBackend,
 };
 pub use manager::{
-    CapabilityObservation, CapabilityObservationKind, ManagerError, ManagerErrorKind,
-    RestartPolicyStatus, RuntimeExit, RuntimeExitReason, RuntimeManager, RuntimeManagerConfig,
-    RuntimeState, RuntimeStatus,
+    CapabilityObservation, CapabilityObservationKind, CapabilityProfile, CapabilityProfileError,
+    EngineCapability, ManagerCapability, ManagerError, ManagerErrorKind, ManagerHealth,
+    RestartPolicyStatus, RuntimeCapability, RuntimeExit, RuntimeExitReason, RuntimeManager,
+    RuntimeManagerConfig, RuntimeState, RuntimeStatus,
 };
 pub use payload::{Hello, MockPipelineSummary};

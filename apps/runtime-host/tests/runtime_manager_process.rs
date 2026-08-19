@@ -2,9 +2,11 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
-use ai_voice_capability::{CapabilityProfileError, EngineIdentity, RuntimeBackend};
+use ai_voice_capability::{EngineIdentity, RuntimeBackend};
 use ai_voice_config::ProductConfig;
-use ai_voice_runtime_host::{RuntimeManager, RuntimeManagerConfig, RuntimeState};
+use ai_voice_runtime_host::{
+    CapabilityProfileError, RuntimeManager, RuntimeManagerConfig, RuntimeState,
+};
 
 fn integration_paths() -> (PathBuf, PathBuf) {
     let runtime = std::env::var_os("AIVS_RUNTIME_PATH")
