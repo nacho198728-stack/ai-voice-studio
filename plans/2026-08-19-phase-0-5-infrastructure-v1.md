@@ -44,7 +44,7 @@
 
 - [ ] 实现 Mock VoiceEngine 动态插件。Mock Engine 通过唯一的 C ABI 工厂入口暴露函数表，支持确定性初始化、模拟模型加载、流准备、可配置处理延迟、固定且可校验的 PCM 转换、reset 和 metrics；它不得引用 Rust/Tauri 或任何 AI/音频设备依赖。受影响路径包括 `engines/mock` 和 `backend/mock`。确定性输出让端到端测试可以验证确实调用了插件，而不是只验证 Runtime 存活。
 
-- [ ] 定义 RuntimeMessage 并实现有界 IPC framing。schema 固定 version、request_id、command、payload 和 result/ErrorCode；Rust/C++ 一致处理版本、截断、粘包和大小上限。C++ stdout 专用于协议，日志使用 stderr/文件。
+- [x] 定义 RuntimeMessage 并实现有界 IPC framing。schema 固定 version、request_id、command、payload 和 result/ErrorCode；Rust/C++ 一致处理版本、截断、粘包和大小上限。C++ stdout 专用于协议，日志使用 stderr/文件。
 
 - [ ] 实现 Rust RuntimeManager 状态机。提供 start_runtime、stop_runtime、get_runtime_status 和 get_capabilities，并增加内部的握手、request correlation、超时、优雅关闭、进程退出监控、标准错误收集和崩溃恢复接口；状态至少包括 stopped、starting、connected、stopping、crashed 和 error。受影响路径包括 `apps/runtime-host`。Phase 0.5 只建立有限重启策略接口，不实现无限自动重启。
 
