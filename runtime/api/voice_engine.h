@@ -304,6 +304,22 @@ static inline void aivs_voice_engine_clear_factory_output(
   for (index = 0U; index < clear_size; ++index) {
     bytes[index] = 0U;
   }
+  if (output_capacity_bytes >= AIVS_VOICE_ENGINE_API_V1_SIZE) {
+    output->struct_size = 0U;
+    output->abi_version = 0U;
+    output->initialize = NULL;
+    output->shutdown = NULL;
+    output->get_engine_info = NULL;
+    output->load_model = NULL;
+    output->prepare_stream = NULL;
+    output->process_audio = NULL;
+    output->reset = NULL;
+    output->get_metrics = NULL;
+    output->reserved[0] = 0U;
+    output->reserved[1] = 0U;
+    output->reserved[2] = 0U;
+    output->reserved[3] = 0U;
+  }
 }
 
 static inline aivs_bool_t aivs_voice_engine_pcm_byte_count_is_addressable(
@@ -338,19 +354,15 @@ static inline aivs_bool_t aivs_voice_engine_pcm_pointers_match_counts(
       && (output_samples == NULL) == (output_frame_capacity == 0U) ? AIVS_TRUE : AIVS_FALSE;
 }
 
-static inline aivs_bool_t aivs_voice_engine_pcm_ranges_are_compatible(
-    const float* input_samples, const float* output_samples, uint64_t byte_count) {
-  uintptr_t input_start;
-  uintptr_t output_start;
+static inline aivs_bool_t aivs_voice_engine_pcm_numeric_ranges_are_compatible(
+    uintptr_t input_start, uintptr_t output_start, uint64_t byte_count) {
   uintptr_t byte_count_as_pointer;
   if (byte_count == 0U) {
     return AIVS_TRUE;
   }
-  if (input_samples == NULL || output_samples == NULL || byte_count > UINTPTR_MAX) {
+  if (byte_count > UINTPTR_MAX) {
     return AIVS_FALSE;
   }
-  input_start = (uintptr_t)input_samples;
-  output_start = (uintptr_t)output_samples;
   byte_count_as_pointer = (uintptr_t)byte_count;
   if (input_start > UINTPTR_MAX - byte_count_as_pointer
       || output_start > UINTPTR_MAX - byte_count_as_pointer) {
@@ -361,6 +373,15 @@ static inline aivs_bool_t aivs_voice_engine_pcm_ranges_are_compatible(
   }
   return input_start + byte_count_as_pointer <= output_start
       || output_start + byte_count_as_pointer <= input_start ? AIVS_TRUE : AIVS_FALSE;
+}
+
+static inline aivs_bool_t aivs_voice_engine_pcm_ranges_are_compatible(
+    const float* input_samples, const float* output_samples, uint64_t byte_count) {
+  if (byte_count != 0U && (input_samples == NULL || output_samples == NULL)) {
+    return AIVS_FALSE;
+  }
+  return aivs_voice_engine_pcm_numeric_ranges_are_compatible(
+      (uintptr_t)input_samples, (uintptr_t)output_samples, byte_count);
 }
 
 static inline aivs_bool_t aivs_voice_engine_frame_capacity_is_sufficient(
@@ -383,16 +404,30 @@ static inline aivs_error_code_t aivs_voice_engine_generation_advance(
 
 static inline void aivs_voice_engine_process_result_set_failure(
     aivs_process_audio_result_t* result,
+    uint32_t outer_capacity_bytes,
+    uint32_t nested_output_capacity_bytes,
     aivs_error_code_t error,
     uint64_t required_frame_count) {
-  if (result == NULL) {
+  if (result == NULL || outer_capacity_bytes < offsetof(aivs_process_audio_result_t, output)) {
     return;
   }
-  result->output.frames_written_or_required = error == AIVS_ERROR_BUFFER_TOO_SMALL
-      ? required_frame_count
-      : UINT64_C(0);
-  result->processed_frame_count = UINT64_C(0);
-  result->stream_generation = UINT64_C(0);
+  if (outer_capacity_bytes >= offsetof(aivs_process_audio_result_t, output)
+          + offsetof(aivs_pcm_mutable_buffer_t, frames_written_or_required)
+          + sizeof(result->output.frames_written_or_required)
+      && nested_output_capacity_bytes >= offsetof(aivs_pcm_mutable_buffer_t, frames_written_or_required)
+          + sizeof(result->output.frames_written_or_required)) {
+    result->output.frames_written_or_required = error == AIVS_ERROR_BUFFER_TOO_SMALL
+        ? required_frame_count
+        : UINT64_C(0);
+  }
+  if (outer_capacity_bytes >= offsetof(aivs_process_audio_result_t, processed_frame_count)
+          + sizeof(result->processed_frame_count)) {
+    result->processed_frame_count = UINT64_C(0);
+  }
+  if (outer_capacity_bytes >= offsetof(aivs_process_audio_result_t, stream_generation)
+          + sizeof(result->stream_generation)) {
+    result->stream_generation = UINT64_C(0);
+  }
 }
 
 static inline aivs_bool_t aivs_voice_engine_api_is_complete_for_version(
@@ -444,9 +479,8 @@ static inline aivs_bool_t aivs_voice_engine_api_v1_is_complete(
   { AIVS_VOICE_ENGINE_API_V1_SIZE, 0U, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, {UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(0)} }
 
 /* Exactly one plugin export. request gives the caller's inclusive ABI range.
- * On success out_api describes the highest common ABI and a complete table.
- * out_api->struct_size is caller capacity on entry and exact table size on
- * return; out_api->abi_version is zero on entry and selected on success. */
+ * out_api_capacity_bytes is the sole output-capacity input; entry table bytes,
+ * including struct_size, are ignored. On success out_api is a complete table. */
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_voice_engine_get_api_fn)(
     const aivs_voice_engine_factory_request_t* request,
     aivs_voice_engine_api_t* out_api,

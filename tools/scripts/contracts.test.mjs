@@ -125,6 +125,18 @@ test("check detects stale generated output without rewriting it", (t) => {
   assert.equal(readFileSync(rustPath, "utf8"), "stale mapping\n");
 });
 
+test("preserves frozen v1 mappings after active compatibility advances", (t) => {
+  const version = validVersion();
+  version.voice_engine_abi.current_version = 2;
+  version.voice_engine_abi.minimum_compatible_version = 2;
+  const root = fixture(t, { version });
+
+  run(root, "generate");
+  const cPath = path.join(root, "core/contracts/include/ai_voice_contracts/generated_contracts_c.h");
+  assert.match(readFileSync(cPath, "utf8"), /AIVS_VOICE_ENGINE_ABI_V1_VERSION UINT32_C\(1\)/);
+  assert.doesNotThrow(() => run(root, "check"));
+});
+
 test("check rejects duplicate error names and values", (t) => {
   const duplicateName = validErrorCodes();
   duplicateName.codes[1].name = "Success";

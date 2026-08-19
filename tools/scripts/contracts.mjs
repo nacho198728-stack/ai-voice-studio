@@ -119,8 +119,8 @@ function validateVersionDocument(version, rootVersion) {
     const range = { current, minimum };
     if (sectionName === "voice_engine_abi") {
       const v1 = requireInteger(section.v1_version, "voice_engine_abi v1 version", { min: 1 });
-      if (v1 > current || v1 < minimum) {
-        fail("voice_engine_abi v1 version must be in the compatible range");
+      if (v1 > current) {
+        fail("voice_engine_abi v1 version must not exceed current version");
       }
       range.v1 = v1;
     }

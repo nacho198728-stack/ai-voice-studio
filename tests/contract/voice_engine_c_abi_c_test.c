@@ -145,10 +145,14 @@ int main(void) {
   assert_factory_clear(0U);
   assert_factory_clear(7U);
   assert_factory_clear(8U);
+  assert_factory_clear(12U);
   assert_factory_clear(16U);
   assert_factory_clear(AIVS_VOICE_ENGINE_API_V1_SIZE - 1U);
   assert_factory_clear(AIVS_VOICE_ENGINE_API_V1_SIZE);
   assert_factory_clear(AIVS_VOICE_ENGINE_API_V1_SIZE + 8U);
+  aivs_voice_engine_clear_factory_output(&api, AIVS_VOICE_ENGINE_API_V1_SIZE);
+  assert(api.initialize == NULL && api.shutdown == NULL && api.get_engine_info == NULL);
+  api = (aivs_voice_engine_api_t)AIVS_VOICE_ENGINE_API_OUTPUT_INIT;
 
   assert(aivs_voice_engine_pcm_pointers_match_counts(NULL, 0U, NULL, 0U));
   assert(aivs_voice_engine_pcm_pointers_match_counts(samples, 1U, samples, 1U));
@@ -156,8 +160,8 @@ int main(void) {
   assert(aivs_voice_engine_pcm_ranges_are_compatible(samples, samples, 8U));
   assert(!aivs_voice_engine_pcm_ranges_are_compatible(samples, samples + 1, 8U));
   assert(aivs_voice_engine_pcm_ranges_are_compatible(samples, samples + 4, 8U));
-  assert(!aivs_voice_engine_pcm_ranges_are_compatible(
-      (const float*)(uintptr_t)(UINTPTR_MAX - 2U), samples, 4U));
+  assert(!aivs_voice_engine_pcm_numeric_ranges_are_compatible(
+      UINTPTR_MAX - 2U, (uintptr_t)samples, 4U));
   assert(!aivs_voice_engine_frame_capacity_is_sufficient(2U, 1U));
   assert(aivs_voice_engine_pcm_byte_count_is_addressable(UINT64_MAX / 4U, 1U, &bytes));
   assert(bytes == UINT64_MAX - 3U);
@@ -195,14 +199,23 @@ int main(void) {
   result.stream_generation = 9U;
   memcpy(before_samples, samples, sizeof(samples));
   before_result = result;
-  aivs_voice_engine_process_result_set_failure(&result, AIVS_ERROR_INVALID_ARGUMENT, 7U);
+  aivs_voice_engine_process_result_set_failure(
+      &result, sizeof(result), sizeof(result.output), AIVS_ERROR_INVALID_ARGUMENT, 7U);
   assert(memcmp(samples, before_samples, sizeof(samples)) == 0);
   assert(memcmp(&result.output, &before_result.output, offsetof(aivs_pcm_mutable_buffer_t, frames_written_or_required)) == 0);
   assert(result.output.frames_written_or_required == 0U);
   assert(result.processed_frame_count == 0U);
   assert(result.stream_generation == 0U);
-  aivs_voice_engine_process_result_set_failure(&result, AIVS_ERROR_BUFFER_TOO_SMALL, 7U);
+  aivs_voice_engine_process_result_set_failure(
+      &result, sizeof(result), sizeof(result.output), AIVS_ERROR_BUFFER_TOO_SMALL, 7U);
   assert(result.output.frames_written_or_required == 7U);
+
+  memset(&result, 0xA5, sizeof(result));
+  aivs_voice_engine_process_result_set_failure(&result, 8U, 0U, AIVS_ERROR_INVALID_ARGUMENT, 7U);
+  assert(((const uint8_t*)&result)[8] == 0xA5U);
+  aivs_voice_engine_process_result_set_failure(
+      &result, sizeof(result), 8U, AIVS_ERROR_INVALID_ARGUMENT, 7U);
+  assert(result.output.frames_written_or_required == UINT64_C(0xA5A5A5A5A5A5A5A5));
 
   assert(AIVS_ERROR_SUCCESS == 0);
   assert(AIVS_ERROR_UNSUPPORTED_VOICE_ENGINE_ABI == 1001);
