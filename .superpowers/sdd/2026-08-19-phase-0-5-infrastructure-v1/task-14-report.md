@@ -21,7 +21,7 @@ and negative fixtures; real Windows execution remains Task 18.
 | ABI/current/minimum versions and fixed-width values | The C contract pins v1/current/minimum to 1, all ABI boolean/PCM/reset values and widths, and all 12 generated canonical error values. `aivs_contract_mapping_test` independently checks generated C++ mappings. |
 | Every public v1 structure | `voice_engine_abi_v1_layout.h`, compiled by both languages, pins 19 structure sizes, 8-byte alignments, every field offset, every two-entry reserved array, and the API table's four-entry reserve on a 64-bit pointer ABI. |
 | Initialization macros | `voice_engine_abi_v1_initializers.h`, executed by both consumers in Debug and Release, pins all 13 published initializer macros. Test-owned literal helpers recursively check every field of nested byte views, both nested mutable byte buffers, and the nested mutable PCM output, in addition to every top-level default and reserve. |
-| Eight operations and factory signatures | The factory declaration and public typedef are independently compared with a test-owned prototype that spells the return and all three parameter types; its Windows branch directly spells `__cdecl` without reusing the public calling-convention macro. C `_Generic` and C++ `std::is_same` perform the comparisons without odr-using the export. The eight operation signatures remain independently constrained by explicit C stubs, strict diagnostics, and their table-slot type assertions. |
+| Eight operations and factory signatures | The factory declaration and public typedef are independently compared with a test-owned prototype returning literal `int32_t` over `const struct aivs_voice_engine_factory_request*`, `struct aivs_voice_engine_api*`, and `uint32_t`. Its Windows branch directly spells `__cdecl`; no public scalar/struct typedef or calling-convention macro is reused by the expected type. C `_Generic` and C++ `std::is_same` perform the comparisons without odr-using the export. The eight operation signatures remain independently constrained by explicit C stubs, strict diagnostics, and their table-slot type assertions. |
 | Table completeness and negotiation | Header helper tests cover invalid/no-overlap/highest-overlap selection, exact/short/large capacity, bounded clearing, full-table completeness, wrong version, reserve, and missing-slot rejection. The dynamic Mock matrix additionally proves a future host range `[1,2]` selects and returns a complete v1 table. |
 | Failure atomicity and caller-owned buffers | The C helper test pins output clearing canaries, pointer/count rules, checked PCM byte/range arithmetic, exact/disjoint/overlap rules, capacity, generation exhaustion, and bounded process-result normalization. The real Mock dynamic and matrix tests cover info/process/prepare/reset/metrics failure normalization without modifying caller PCM or metadata. |
 | Exactly one Mock plugin export | macOS/Linux inspect the actual shared library with `nm`. MSVC now registers the same CTest name using `dumpbin /NOLOGO /EXPORTS`; fixture tests prove the parser accepts only `aivs_voice_engine_get_api` and rejects an additional export. |
@@ -62,13 +62,15 @@ new audio semantics, or speculative ABI surface was added.
   and `tests/runtime/mock_voice_engine_exports.cmake`.
 - MSVC parser evidence: `tests/fixtures/msvc-exports-factory-only.txt` and
   `tests/fixtures/msvc-exports-extra-symbol.txt`.
+- Scalar-drift evidence: `tests/contract/voice_engine_adversarial_compile.cmake`
+  and `tests/fixtures/voice_engine_unsigned_error_alias_test.{c,cpp}`.
 - Portable test configuration: `tests/CMakeLists.txt`.
 - This evidence: `.superpowers/sdd/2026-08-19-phase-0-5-infrastructure-v1/task-14-report.md`.
 
 ## Verification
 
-- Debug configure/build/CTest — passed 21/21.
-- Release configure/build/CTest — passed 21/21, with active contract assertions.
+- Debug configure/build/CTest — passed 23/23.
+- Release configure/build/CTest — passed 23/23, with active contract assertions.
 - Target compile-command inspection — confirmed `-std=c17` / `-std=c++20`,
   extensions disabled by CMake, and `-Wall -Wextra -Wpedantic -Werror` on the
   two macOS consumer translation units.
@@ -89,6 +91,7 @@ new audio semantics, or speculative ABI surface was added.
 
 - `dd12752` — `test(runtime): close VoiceEngine ABI contract gate`
 - `92f4ee5` — `test(runtime): make ABI expectations independent`
+- `74cf631` — `test(runtime): reject coordinated ABI scalar drift`
 
 ## Limitations
 
@@ -127,3 +130,33 @@ new audio semantics, or speculative ABI surface was added.
   root pnpm tests; and Cargo fmt, locked workspace check, clippy with warnings
   denied, and locked workspace tests. Windows execution remains deferred to
   Task 18 and is not claimed.
+
+## Review fix round 2
+
+- Closed the remaining coordinated-component drift gap. The test-owned factory
+  type no longer uses `aivs_error_code_t`,
+  `aivs_voice_engine_factory_request_t`, or `aivs_voice_engine_api_t`: it spells
+  `int32_t`, both public structure tags, and `uint32_t` directly. Windows still
+  spells `__cdecl` literally and other platforms use the platform default.
+  Both the exported declaration and public factory typedef must equal this
+  independent type in C and C++.
+- The C consumer now uses `_Generic` to require `aivs_error_code_t` to be
+  exactly `int32_t`; the C++ consumer uses `std::is_same_v`. The existing
+  four-byte and canonical-value assertions remain complementary evidence and
+  no longer stand in for exact signed type identity.
+- Added persistent adversarial compile evidence without editing the public
+  header. The fixtures preload the real generated contract with its error alias
+  renamed, substitute same-width `uint32_t`, and then include the real C/C++
+  contract translation units. The CTest script requires compilation to fail
+  specifically on `canonical error code type must be exactly int32_t`, so an
+  unrelated compile failure cannot produce a pass.
+- RED: before changing the oracle, both C17 and C++20 adversarial fixtures
+  compiled successfully and both CTests failed with `VoiceEngine contract
+  accepted unsigned aivs_error_code_t drift`. GREEN: after the independent
+  type and exact-alias assertions, the normal and adversarial C/C++ cases passed
+  4/4 in Debug; the negative fixtures were rejected for the required reason.
+- Fresh round-2 verification passed: full Debug and Release CTest 23/23 each,
+  canonical drift and generator tests 6/6, root pnpm tests, Cargo fmt, locked
+  workspace check, clippy with warnings denied, locked workspace tests, and
+  `git diff --check`. The frozen ABI header, canonical JSON, ADR-002, main plan,
+  and ADR-003 were not changed. Windows execution remains Task 18.
