@@ -30,7 +30,7 @@
 
 - [x] 建立 Monorepo 顶层模块与仓库元数据。创建 `apps`、`core`、`audio`、`runtime`、`engines`、`backend`、`tests`、`docs` 和 `tools`，新增根 `README.md`、`.gitignore`、版本与许可证说明；现有 V1.0 文档保持原位且不覆盖。
 
-- [ ] 建立 pnpm 与 Cargo workspace。`pnpm-workspace.yaml` 和 `package.json` 管理 Desktop 与统一开发命令；根 `Cargo.toml` 管理 Tauri backend、`apps/runtime-host` 和 Rust contracts，且不复制 CMake 内部逻辑。
+- [x] 建立 pnpm 与 Cargo workspace。`pnpm-workspace.yaml` 和 `package.json` 管理 Desktop 与统一开发命令；根 `Cargo.toml` 管理 Tauri backend、`apps/runtime-host` 和 Rust contracts，且不复制 CMake 内部逻辑。
 
 - [ ] 建立 CMake 工程与 presets。根 `CMakeLists.txt` 和 `CMakePresets.json` 管理 C++ Runtime、C ABI、Mock Engine 与 CTest，并定义跨平台产物目录。
 
