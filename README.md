@@ -16,7 +16,7 @@ AI Voice Studio is a native desktop voice-conversion product. This repository is
 | `docs/` | Architecture, development, and decision records. |
 | `tools/` | Reproducible developer and repository tooling. |
 
-The V1.0 architecture document and implementation plans remain at the repository root and in `plans/` as the authoritative project baseline. This initial scaffold intentionally contains no build workspace, source code, dependencies, audio devices, AI runtime, Python runtime, or user features.
+The V1.0 architecture document and implementation plans remain at the repository root and in `plans/` as the authoritative project baseline. The initial pnpm and Cargo workspaces establish package boundaries only; they contain no runtime behavior, dependencies, audio devices, AI runtime, Python runtime, or user features.
 
 ## Project notes
 

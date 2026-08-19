@@ -1,0 +1,9 @@
+{
+  "name": "ai-voice-studio",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "format:check": "cargo fmt --all -- --check",
+    "workspace:list": "pnpm --recursive list --depth -1"
+  }
+}
