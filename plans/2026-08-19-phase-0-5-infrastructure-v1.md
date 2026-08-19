@@ -64,7 +64,7 @@
 
 - [ ] 在 `.github/workflows/build.yml` 新增 macOS arm64 与 Windows x64 jobs。两个干净 runner 均执行 CMake/CTest、Cargo、前端和 Tauri 验证；Windows 额外验证 MSVC 动态库加载与子进程关闭，真实 Windows 结果为验收门槛。
 
-- [ ] 完成工程文档与架构决策历史。生成 `docs/development/DEVELOPMENT.md`、`docs/architecture/ARCHITECTURE.md`、`docs/adr/ADR-000-monorepo.md`、`ADR-001-tauri-rust-control-plane.md` 和 `ADR-002-cpp-runtime-c-abi.md`；每份 ADR 记录背景、决定、理由、替代方案、后果和状态，并与对应实现同批完成。ADR-003 明确保留给 Audio Engine。
+- [x] 完成工程文档与架构决策历史。生成 `docs/development/DEVELOPMENT.md`、`docs/architecture/ARCHITECTURE.md`、`docs/adr/ADR-000-monorepo.md`、`ADR-001-tauri-rust-control-plane.md` 和 `ADR-002-cpp-runtime-c-abi.md`；每份 ADR 记录背景、决定、理由、替代方案、后果和状态，并与对应实现同批完成。ADR-003 明确保留给 Audio Engine。
 
 - [ ] 执行 Phase 0.5 最终验收并冻结基线。按需求清单逐项记录 macOS 本机结果和 Windows CI 结果，确认安装包/进程不包含 Python、PyTorch、CUDA、AI 模型或真实音频访问；记录已知限制、构建产物位置、版本和下一阶段输入。验收报告放在 `docs/development/PHASE-0.5-ACCEPTANCE.md`，只有所有硬门槛通过才标记完成。
 
