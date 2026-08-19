@@ -9,6 +9,8 @@ execution is pending and is not accepted until the workflow runs on GitHub.
 
 Repository declarations are authoritative for exact versions:
 
+### Exact repository tools
+
 | Tool | Required version | Authority |
 | --- | --- | --- |
 | Node.js | `24.16.0` | `.node-version` |
@@ -18,13 +20,15 @@ Repository declarations are authoritative for exact versions:
 
 Native minimums and CI's known versions are:
 
+### Native minimums and validated versions
+
 | Tool | Supported minimum | CI/validated version |
 | --- | --- | --- |
 | CMake | `3.25.0` | `4.4.2` |
 | Ninja | `1.10.0` | `1.13.2` |
 | Git | `2.40.0` | `2.50.1` locally |
-| Xcode | `15.0` | `26.6` locally on macOS arm64 |
-| Visual Studio | VS 2022, MSVC v143, compiler `19.38` or newer | workflow declared; real Windows run pending |
+| Xcode | `15.0.0` | `26.6.0` locally on macOS arm64 |
+| Visual Studio / MSVC | VS 2022, MSVC v143, compiler `19.38.0` or newer | workflow declared; real Windows run pending |
 
 CMake and Ninja are installed at the exact CI versions by the workflow. A
 newer compatible local native tool is allowed when the doctor accepts it.

@@ -53,6 +53,39 @@ case-normalization defect in the new exclusion assertion exposed itself at 4
 of 5; the assertion list was corrected to compare lowercase values. Final
 `pnpm test:docs` is 5 of 5 GREEN and is registered in root `pnpm test`.
 
+### Independent-review fix round
+
+The first independent review rejected the initial gate because its architecture
+check was a keyword set, its version check searched the whole document, its
+link and ADR-003 scopes were narrow, and ADR-002 implied completed Windows ABI
+testing. The fix round again started RED:
+
+- The unchanged keyword predicate accepted a fully reversed
+  `Mock VoiceEngine -> ... -> Tauri` mutation; the dedicated mutation assertion
+  failed exactly as expected.
+- The expanded contract then passed 4 of 8 tests and failed 4 for the missing
+  ordered-edge table, authority-bound version tables, source-bound public DTO
+  tables, and Windows evidence table.
+
+The final 8-test gate parses an explicit ordered edge table and rejects a full
+reverse mutation; matches the five Tauri commands, every `CapabilityDto` field,
+and every public Mock summary field to Rust source; ties loader/pipeline edges
+and the 80-byte size to source; binds versions to their named DEVELOPMENT table
+rows and source declarations; validates root and filtered pnpm scripts, Node
+paths, Rust pins, CMake preset types, and CI-exact staging/Tauri/copy arguments;
+walks every Markdown document under `docs` and every authored source-tree
+README (excluding recorded generated/dependency/build trees), including
+reference links and anchors; and rejects case/separator variants of any actual
+ADR-003 filename.
+
+ADR-002 now has a platform evidence table: macOS is the locally executed ABI
+gate; Windows is explicitly source/config/fixture-only, pending Task 18, and not
+accepted. A completion-claim mutation fails, and the gate checks the other
+architecture/development/ADR documents for the same contradiction. ARCHITECTURE
+now enumerates every public capability field—including schema, Runtime/protocol
+versions, engine identity, separate availability values, and generation—and
+documents `not_evaluated` semantics without an inaccurate `only` claim.
+
 ## Files changed
 
 - Added `docs/architecture/ARCHITECTURE.md`.
@@ -94,7 +127,7 @@ behavior, Audio/AI/Python implementation, or user feature changed.
 
 All verification ran from the repository root on macOS arm64:
 
-- `pnpm test`: GREEN; 36 JavaScript/frontend tests total, including 5 document
+- `pnpm test`: GREEN; 39 JavaScript/frontend tests total, including 8 document
   contract tests.
 - Desktop lint, typecheck, and Vite build: GREEN.
 - `cargo +1.97.1 fmt --all -- --check`: GREEN.

@@ -23,6 +23,22 @@ Tauri webview
   -> Mock VoiceEngine
 ```
 
+### Ordered process and plugin edges
+
+The structured edge list is normative; each row's destination is the next
+row's source.
+
+| From | To | Boundary carried across the edge |
+| --- | --- | --- |
+| Tauri webview | Desktop command allowlist | Bounded Tauri invoke DTO |
+| Desktop command allowlist | CommandService / RuntimeManager | Typed Rust call with no webview-supplied input |
+| CommandService / RuntimeManager | RuntimeMessage v1 | Correlated bounded child stdin/stdout frame |
+| RuntimeMessage v1 | voice-runtime Session | Validated request or response command |
+| voice-runtime Session | MockPipeline | Native pipeline service call |
+| MockPipeline | VoiceEngine loader | Explicit absolute plugin path |
+| VoiceEngine loader | VoiceEngine C ABI | Negotiated factory table and opaque handle |
+| VoiceEngine C ABI | Mock VoiceEngine | Caller-owned buffers and canonical result |
+
 The Mock pipeline returns only a fixed 80-byte summary containing frame counts,
 metrics, and a checksum. PCM remains inside the native process.
 
@@ -53,6 +69,16 @@ capabilities, Mock pipeline, and stop. It receives stable bounded DTOs and
 public error codes, never raw IPC, native stderr, host paths, process IDs, PCM,
 or arbitrary payloads. There is no generic shell, filesystem, dialog, network,
 clipboard, updater, or plugin command.
+
+### Public command allowlist
+
+| Command | Public result |
+| --- | --- |
+| `start_runtime` | Runtime status DTO |
+| `get_runtime_status` | Runtime status DTO |
+| `get_runtime_capabilities` | Capability DTO |
+| `run_mock_pipeline` | Mock pipeline summary DTO |
+| `stop_runtime` | Runtime status DTO |
 
 The explicit Tauri window accepts only the packaged local origin, or the exact
 loopback Vite origin in development. CSP blocks network connections, media,
@@ -130,6 +156,20 @@ semantics, and exact calls/frames/errors/latency metrics. MockPipeline processes
 128 stereo frames (256 samples) and sends only the 80-byte fixed summary over
 IPC. It is verification infrastructure, not a voice-conversion model.
 
+The desktop intentionally narrows that native result to these public fields:
+
+### MockPipelineSummaryDto public fields
+
+| Rust field | Public meaning |
+| --- | --- |
+| `input_frames` | Native input frame count |
+| `output_frames` | Native output frame count |
+| `checksum` | Fixed-width lowercase hexadecimal output checksum |
+| `elapsed_microseconds` | Measured native pipeline elapsed time |
+| `process_call_count` | Engine process call count |
+| `process_error_count` | Engine process error count |
+| `stream_generation` | Mock stream generation after prepare/reset semantics |
+
 ## Configuration, capability, errors, and logging
 
 [`CONFIGURATION.md`](../development/CONFIGURATION.md) is the detailed policy.
@@ -140,10 +180,27 @@ paths are absent, and trace/debug is clamped unless an explicit debug bit also
 grants authority. There is no implicit cwd, PATH, home, environment, or system
 plugin search.
 
-Capabilities report only normalized platform, architecture, Runtime state,
-backend, and Mock availability. They do not inspect CPU/GPU/NPU/RAM, hardware,
-audio devices, drivers, benchmarks, or machine identity. Observations are
-generation-bound and distinguish not evaluated, unknown, unavailable, and
+The public capability DTO is privacy-minimal but includes every field below; it
+does not expose the internal manager-health field.
+
+### CapabilityDto public fields
+
+| Rust field | Public meaning |
+| --- | --- |
+| `schema_version` | Capability schema version |
+| `platform` | Normalized platform name |
+| `architecture` | Normalized process architecture |
+| `runtime_version` | Canonical Runtime version |
+| `protocol_version` | Negotiated RuntimeMessage protocol version |
+| `backend` | Normalized backend identity (`mock` or `unavailable`) |
+| `runtime_availability` | Runtime availability, including `not_evaluated` before an observation |
+| `engine_identity` | Optional normalized Mock engine identity |
+| `engine_availability` | Engine availability, including `not_evaluated` before a query result |
+| `generation` | RuntimeManager generation that owns the observation |
+
+Capability evaluation does not inspect CPU/GPU/NPU/RAM, hardware, audio
+devices, drivers, benchmarks, or machine identity. Observations are
+generation-bound and distinguish `not_evaluated`, unknown, unavailable, and
 available.
 
 Errors are canonical integers internally and bounded stable DTOs at the webview

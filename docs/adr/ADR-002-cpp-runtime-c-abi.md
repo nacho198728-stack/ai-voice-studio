@@ -49,14 +49,22 @@ the native process.
 
 Process isolation contains library crashes and malformed native behavior below
 the control plane. A small append-only C ABI avoids compiler, STL, exception,
-and allocator compatibility problems while remaining usable from C and C++ on
-macOS and Windows. Explicit ownership and sizes make adversarial validation
-possible. The prepare/process split establishes a realtime-compatible boundary
-without prematurely choosing the Phase 1 device/stream architecture.
+and allocator compatibility problems and gives the macOS and Windows build
+configurations the same C/C++ contract. Explicit ownership and sizes make
+adversarial validation possible. The prepare/process split establishes a
+realtime-compatible boundary without prematurely choosing the Phase 1
+device/stream architecture.
 
 The deterministic Mock makes the contract executable: dynamic loading, exact
 transforms and checksums, reset semantics, metrics, error handling, simulated
 work, and unique exports are verified without introducing AI or audio devices.
+
+### Platform verification status
+
+| Target | Evidence status |
+| --- | --- |
+| macOS arm64 | The real dynamic library, C ABI pipeline, process integration, and Debug/Release tests have executed locally. |
+| Windows x64 | Source/config/fixture only; real Windows execution is pending Task 18 and not accepted. |
 
 ## Alternatives considered
 
@@ -86,8 +94,9 @@ open devices or accept ADR-003 early.
 
 - Rust and Tauri never load, store, or dereference a VoiceEngine library or
   handle; only `voice-runtime` does so.
-- Runtime and plugins can be compiled independently while preserving one tested
-  ABI on macOS and Windows.
+- Runtime and plugins have one source contract plus macOS/Windows build and CI
+  paths. Only macOS has executed the real dynamic ABI gate locally; Windows
+  remains source/config/fixture coverage pending the Task 18 runner gate.
 - ABI evolution is append-only. Existing fields, operations, versions, and
   canonical error values cannot be silently reinterpreted.
 - The plugin owns its opaque handle; callers own all strings, PCM, and output
