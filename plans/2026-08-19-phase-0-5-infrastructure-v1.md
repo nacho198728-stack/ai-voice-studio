@@ -54,7 +54,7 @@
 
 - [x] 创建 Desktop Shell 并打通 Mock 控制链路。`apps/desktop` 只显示产品名、开发版本、Runtime 状态和控制操作；Tauri 经 RuntimeManager/IPC 触发 C++ 内部 Mock PCM，UI 只接收帧数、校验值、耗时和 metrics，不接触 PCM 或业务功能。
 
-- [ ] 在 `tests/contract` 建立 C ABI contract test。分别用 C 和 C++ 编译头文件，验证 ABI version、struct size、函数表和插件入口。
+- [x] 在 `tests/contract` 建立 C ABI contract test。分别用 C 和 C++ 编译头文件，验证 ABI version、struct size、函数表和插件入口。
 
 - [ ] 在 Rust workspace 建立协议 contract test。验证 RuntimeMessage、ErrorCode、版本兼容和非法消息拒绝行为。
 
