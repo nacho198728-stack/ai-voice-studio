@@ -488,54 +488,56 @@ async fn actor_abort_holds_capability_observation_until_its_pid_is_reaped() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires CTest-provided controlled child fixture"]
-async fn actor_abort_holds_a_queued_command_until_its_pid_is_reaped() {
+async fn actor_abort_holds_an_accepted_start_until_its_pid_is_reaped() {
     bounded(async {
         let fixture = fixture_path();
         let (manager_sender, manager_receiver) = std_mpsc::sync_channel(1);
         let (abort_sender, abort_receiver) = std_mpsc::sync_channel(1);
         let owner = std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
                 .enable_all()
                 .build()
                 .unwrap();
             let manager = runtime.block_on(async {
                 let mut config =
-                    RuntimeManagerConfig::new(fixture, std::env::temp_dir().join("shutdown-hang"));
-                config.command_queue_capacity = 1;
-                config.shutdown_timeout = Duration::from_secs(10);
+                    RuntimeManagerConfig::new(fixture, std::env::temp_dir().join("handshake-hang"));
+                config.handshake_timeout = Duration::from_secs(10);
                 let manager = RuntimeManager::new(config).unwrap();
-                let pid = manager.start_runtime().await.unwrap().pid.unwrap();
-                manager_sender.send((manager.clone(), pid)).unwrap();
+                manager_sender.send(manager.clone()).unwrap();
                 manager
             });
-            // The single-thread Runtime is deliberately not driven here, so a
-            // successfully sent command remains accepted in Actor::commands.
             abort_receiver
                 .recv_timeout(CASE_DEADLINE)
                 .expect("external caller did not request actor abort");
             drop(runtime);
             drop(manager);
         });
-        let (manager, pid) = manager_receiver
+        let manager = manager_receiver
             .recv_timeout(CASE_DEADLINE)
-            .expect("owner runtime did not publish the manager and PID");
+            .expect("owner runtime did not publish the manager");
+        let start_manager = manager.clone();
+        let start = tokio::spawn(async move { start_manager.start_runtime().await });
+        let deadline = tokio::time::Instant::now() + POLL_DEADLINE;
+        let pid = loop {
+            let status = manager.get_runtime_status().await.unwrap();
+            if let Some(pid) = status.pid {
+                break pid;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "accepted Start did not publish a child PID"
+            );
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        };
         let mut guard = ProcessGuard::new(pid);
-        let queued_manager = manager.clone();
-        let queued = tokio::spawn(async move { queued_manager.stop_runtime().await });
-        tokio::task::yield_now().await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), manager.get_runtime_status())
-                .await
-                .is_err(),
-            "the first command did not occupy the one-slot Actor queue"
-        );
 
         abort_sender.send(()).unwrap();
-        let error = queued.await.unwrap().unwrap_err();
+        let error = start.await.unwrap().unwrap_err();
         assert_eq!(error.kind, ManagerErrorKind::ManagerClosed);
         assert!(
             !process_exists(pid).await,
-            "queued command closed before PID {pid} was reaped"
+            "accepted Start closed before PID {pid} was reaped"
         );
         tokio::task::spawn_blocking(move || owner.join().unwrap())
             .await

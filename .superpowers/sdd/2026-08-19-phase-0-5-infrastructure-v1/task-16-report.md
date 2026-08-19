@@ -50,9 +50,11 @@ The new `runtime_manager_gate` adds only the missing observable process cases:
 7. Dropping the owning Tokio runtime aborts the internal manager actor while a
    manager handle remains alive; the child is synchronously killed and reaped,
    verified through its concrete PID.
-8. Cross-runtime callers prove that an accepted Ping, capability observation,
-   concurrent Stop waiters, and a command accepted into an undriven one-slot
-   Actor queue cannot resolve or close before the exact child PID disappears.
+8. Cross-runtime callers prove that an accepted Start, Ping, capability
+   observation, and concurrent Stop waiters cannot resolve or close before the
+   exact child PID disappears. A white-box ActorAbortOwner test separately
+   awaits a send into a known-empty one-slot queue before arming a delayed reap
+   barrier, removing scheduler inference from queued-command acceptance.
 
 Every new async case has a ten-second outer deadline, two-second bounded polls,
 and a concrete-PID cleanup guard. The runtime-abort case installs its PID guard
@@ -93,6 +95,23 @@ reap driver covers initial/poll `try_wait` errors, `start_kill` errors, timeout
 classification, and delayed completion ownership without platform-specific or
 unsafe APIs.
 
+The second review found two narrower cancellation/resource defects. Compatible
+Hello handling removed `StartContext` before awaiting the stderr snapshot, and
+the pathological post-timeout fallback could run an unbounded 5 ms retry loop
+directly on a Tokio worker. Hello now snapshots status before taking the Start
+reply. A concrete-PID test holds the stderr mutex, cancels the owning runtime in
+that exact window, and observes `ManagerClosed` only after reap.
+
+After two failed async waits, Actor now transfers the child to a standard-thread
+reaper and retains a cancel-safe `ReapBarrier` in Actor state. The Actor awaits
+that barrier asynchronously; cancellation moves the same barrier and every
+accepted reply to `ActorAbortOwner`. The thread uses exponential backoff from
+5 ms to a one-second cap and emits at most one fixed diagnostic per minute.
+Persistent errors intentionally retain the process/barrier/replies until a real
+reap; they neither report false completion nor occupy a Tokio worker. The
+thread-spawn-failure fail-closed path may block its caller, but uses the same
+capped backoff rather than a hot loop.
+
 ## RED/GREEN evidence
 
 - Initial gate RED: six of seven new cases failed. The real Unicode process
@@ -105,15 +124,21 @@ unsafe APIs.
 - Review-round RED captured an accepted Ping returning `ManagerClosed` while
   its concrete PID was still observable. This isolated reply/process ownership
   order from the earlier zombie-only failure.
+- Second-review RED held the stderr mutex during compatible Hello and captured
+  the accepted Start reply closing while its PID still existed. A persistent
+  error driver separately recorded 19 kill attempts in 120 ms under the fixed
+  5 ms loop, exceeding the capped-backoff bound of six.
 - GREEN: the controlled child gained only deterministic modes needed by the
   tests, generation parsing from the actual manager argument, and no manager
   logic duplication. The dedicated gate passes 11/11 in Debug and Release.
 - The four cross-runtime cancellation barriers passed ten consecutive focused
-  gate runs. Three synchronous reaper tests cover error retry, honest timeout,
-  and delayed detached-owner completion.
+  gate runs. Reaper/ownership unit tests cover error retry, honest timeout,
+  persistent-error cadence, delayed detached completion, a nonblocking Tokio
+  barrier wait, deterministic one-slot command acceptance, and the compatible
+  Hello cancellation window.
 - The three focused RuntimeManager process suites passed five consecutive Debug
   runs: real child 5/5 each run, legacy controlled fixture 17/17 each run, and
-  the new gate 7/7 each run.
+  the then-current gate 11/11 each run.
 
 ## Requirement-to-evidence map
 
@@ -133,9 +158,9 @@ unsafe APIs.
   mapping.
 - **No orphan before replies:** legacy stop, timeout, drop, concurrent Stop,
   desktop-exit race, and queue-starvation tests; new actor/runtime abort fallback
-  plus accepted request/capability/Stop/queued-command reply barriers and
-  per-case concrete PID guards. No process-name-only assertion is used as
-  primary evidence.
+  plus accepted Start/request/capability/Stop reply barriers, a deterministic
+  accepted queued-command barrier, and per-case concrete PID guards. No
+  process-name-only assertion is used as primary evidence.
 - **Generation/restart:** legacy successful and failed capability observations
   reject stale generation 1 after restart; new queued generation-1 response
   flood is ignored and generation 2 returns fresh Ping/capability data.
@@ -154,7 +179,7 @@ unsafe APIs.
 - `cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings`:
   passed without warnings.
 - `cargo +1.97.1 check --locked --workspace --all-targets`: passed.
-- `cargo +1.97.1 test --locked --workspace`: 63 passed, 0 failed; native-path
+- `cargo +1.97.1 test --locked --workspace`: 67 passed, 0 failed; native-path
   integration cases remain intentionally ignored here and run by CTest.
 - `pnpm contracts:check`: passed with no generated drift.
 - Root `pnpm test`: 26 passed, 0 failed.
