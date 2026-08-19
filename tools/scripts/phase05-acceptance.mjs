@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
+
+import { readPhase05DeclaredVersions } from "./inspect-phase05-bundle.mjs";
 
 const requirementIds = new Set([
   "MONO",
@@ -25,6 +28,23 @@ const artifactPaths = [
   "target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/config/config.json",
   "target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib",
 ];
+const binaryPaths = [
+  "Contents/MacOS/ai-voice-studio",
+  "Contents/MacOS/voice-runtime",
+  "Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib",
+];
+const inspectionKeys = [
+  "architectures",
+  "dependencies",
+  "undefinedSymbols",
+  "globalSymbols",
+];
+const expectedInspections = {
+  architectures: { tool: "/usr/bin/lipo", arguments: ["-archs"] },
+  dependencies: { tool: "/usr/bin/otool", arguments: ["-L"] },
+  undefinedSymbols: { tool: "/usr/bin/nm", arguments: ["-u"] },
+  globalSymbols: { tool: "/usr/bin/nm", arguments: ["-g"] },
+};
 
 function stripCode(value) {
   return value.replaceAll("`", "").trim();
@@ -49,13 +69,207 @@ function assertUncheckedPlanTask(planMarkdown, marker, task) {
   if (!line?.startsWith("- [ ] ")) throw new Error(`Task ${task} must remain unchecked`);
 }
 
-export function validatePhase05Acceptance({ repositoryRoot, markdown, planMarkdown }) {
+function same(left, right) {
+  return isDeepStrictEqual(left, right);
+}
+
+function assertManifestVersions(manifest, declaredVersions) {
+  const expected = {
+    product: {
+      ...declaredVersions.product,
+      observed: declaredVersions.product.declared,
+      authority: `${declaredVersions.product.authority} + bundle Info.plist`,
+    },
+    runtime: { ...declaredVersions.runtime, observed: declaredVersions.runtime.declared },
+    ipcProtocol: {
+      ...declaredVersions.ipcProtocol,
+      observed: declaredVersions.ipcProtocol.declared,
+    },
+    voiceEngineAbi: {
+      ...declaredVersions.voiceEngineAbi,
+      observed: declaredVersions.voiceEngineAbi.declared,
+    },
+    tools: Object.fromEntries(
+      Object.entries(declaredVersions.tools).map(([id, version]) => [
+        id,
+        { ...version, observed: version.declared },
+      ]),
+    ),
+  };
+  if (!same(manifest.versions, expected)) {
+    throw new Error("acceptance manifest version authority drift");
+  }
+}
+
+function assertManifestShape(manifest, declaredVersions) {
+  if (
+    manifest?.schemaVersion !== 1 ||
+    manifest.target !== "aarch64-apple-darwin" ||
+    manifest.bundlePath !== "target/release/bundle/macos/AI Voice Studio.app" ||
+    "bundleRoot" in manifest ||
+    "generatedAt" in manifest
+  ) {
+    throw new Error("acceptance manifest schema or deterministic path contract is invalid");
+  }
+  const manifestArtifacts = manifest.artifacts ?? [];
+  const expectedRelativeArtifacts = artifactPaths.map((relativePath) =>
+    relativePath.slice(`${manifest.bundlePath}/`.length),
+  );
+  if (
+    manifestArtifacts.length !== expectedRelativeArtifacts.length ||
+    !same(
+      manifestArtifacts.map((artifact) => artifact.relativePath).sort(),
+      [...expectedRelativeArtifacts].sort(),
+    )
+  ) {
+    throw new Error("acceptance manifest artifact inventory is invalid");
+  }
+  for (const artifact of manifestArtifacts) {
+    if (
+      !Number.isSafeInteger(artifact.bytes) ||
+      artifact.bytes <= 0 ||
+      !/^[0-9a-f]{64}$/u.test(artifact.sha256) ||
+      typeof artifact.fileType !== "string" ||
+      !artifact.fileType
+    ) {
+      throw new Error(`acceptance manifest artifact metadata is invalid: ${artifact.relativePath}`);
+    }
+  }
+
+  const binaries = manifest.binaries ?? [];
+  if (
+    binaries.length !== binaryPaths.length ||
+    !same(binaries.map((binary) => binary.relativePath).sort(), [...binaryPaths].sort())
+  ) {
+    throw new Error("acceptance manifest binary inventory is invalid");
+  }
+  for (const binary of binaries) {
+    if (!same(binary.architectures, ["arm64"]) || !Array.isArray(binary.dependencies)) {
+      throw new Error(`acceptance manifest binary evidence is invalid: ${binary.relativePath}`);
+    }
+    for (const key of inspectionKeys) {
+      const inspection = binary.inspections?.[key];
+      const expectedInspection = expectedInspections[key];
+      if (
+        inspection?.evidencePresent !== true ||
+        inspection.completed !== true ||
+        inspection.tool !== expectedInspection.tool ||
+        !same(inspection.arguments, expectedInspection.arguments)
+      ) {
+        throw new Error(
+          `acceptance manifest inspection provenance is incomplete: ${binary.relativePath}`,
+        );
+      }
+    }
+    for (const count of Object.values(binary.symbolCounts ?? {})) {
+      if (!Number.isSafeInteger(count) || count < 0) {
+        throw new Error(`acceptance manifest symbol count is invalid: ${binary.relativePath}`);
+      }
+    }
+    if (
+      binary.symbolCounts?.undefinedUnique > binary.symbolCounts?.undefinedObservations ||
+      binary.symbolCounts?.globalUnique > binary.symbolCounts?.globalObservations
+    ) {
+      throw new Error(`acceptance manifest unique symbol count is invalid: ${binary.relativePath}`);
+    }
+  }
+  const summedUndefined = binaries.reduce(
+    (total, binary) => total + binary.symbolCounts.undefinedObservations,
+    0,
+  );
+  const summedGlobal = binaries.reduce(
+    (total, binary) => total + binary.symbolCounts.globalObservations,
+    0,
+  );
+  if (
+    manifest.symbolTotals?.undefinedObservations !== summedUndefined ||
+    manifest.symbolTotals?.globalObservations !== summedGlobal ||
+    !Number.isSafeInteger(manifest.symbolTotals?.undefinedUnique) ||
+    !Number.isSafeInteger(manifest.symbolTotals?.globalUnique) ||
+    manifest.symbolTotals.undefinedUnique > summedUndefined ||
+    manifest.symbolTotals.globalUnique > summedGlobal
+  ) {
+    throw new Error("acceptance manifest aggregate symbol counts are invalid");
+  }
+  if (
+    !same(manifest.exclusions, {
+      bundledPythonOrAiRuntime: false,
+      bundledModelOrAudioAsset: false,
+      forbiddenDynamicDependency: false,
+      forbiddenRuntimeSymbol: false,
+      nonArm64MachO: false,
+    })
+  ) {
+    throw new Error("acceptance manifest exclusion result is incomplete");
+  }
+  assertManifestVersions(manifest, declaredVersions);
+}
+
+function reportVersionRows(manifest) {
+  const entries = [
+    ["Product", manifest.versions.product],
+    ["Runtime", manifest.versions.runtime],
+    ["IPC protocol", manifest.versions.ipcProtocol],
+    ["VoiceEngine ABI", manifest.versions.voiceEngineAbi],
+    ["Node.js", manifest.versions.tools.node],
+    ["pnpm", manifest.versions.tools.pnpm],
+    ["Rust", manifest.versions.tools.rust],
+    ["CMake", manifest.versions.tools.cmake],
+    ["Ninja", manifest.versions.tools.ninja],
+  ];
+  return entries.map(([label, version]) => [
+    label,
+    version.declared,
+    version.observed,
+    version.authority,
+  ]);
+}
+
+function reportInspectionProvenance(binary) {
+  return inspectionKeys
+    .map((key) => {
+      const inspection = binary.inspections[key];
+      return `${path.posix.basename(inspection.tool)} ${inspection.arguments.join(" ")}`.trim();
+    })
+    .join("; ") + " — completed";
+}
+
+function reportBinaryRows(manifest) {
+  return manifest.binaries.map((binary) => [
+    `${manifest.bundlePath}/${binary.relativePath}`,
+    binary.architectures.join(","),
+    String(binary.dependencies.length),
+    String(binary.symbolCounts.undefinedObservations),
+    String(binary.symbolCounts.undefinedUnique),
+    String(binary.symbolCounts.globalObservations),
+    String(binary.symbolCounts.globalUnique),
+    reportInspectionProvenance(binary),
+  ]);
+}
+
+function reportDependencyRows(manifest) {
+  return manifest.binaries.flatMap((binary) =>
+    binary.dependencies.map((dependency) => [
+      `${manifest.bundlePath}/${binary.relativePath}`,
+      dependency,
+    ]),
+  );
+}
+
+export function validatePhase05Acceptance({
+  repositoryRoot,
+  markdown,
+  planMarkdown,
+  manifest,
+  declaredVersions,
+}) {
   if (!path.isAbsolute(repositoryRoot)) throw new Error("repository root must be absolute");
   if (/Phase\s+0\.5\s+complete/iu.test(markdown)) {
     throw new Error("acceptance report must not claim the blocked phase is complete");
   }
   assertUncheckedPlanTask(planMarkdown, "在 `.github/workflows/build.yml`", 18);
   assertUncheckedPlanTask(planMarkdown, "执行 Phase 0.5 最终验收", 20);
+  assertManifestShape(manifest, declaredVersions);
 
   const statusRows = new Map(
     tableAfterHeading(markdown, "## Gate status").map((row) => [row[0], row[1]]),
@@ -104,16 +318,59 @@ export function validatePhase05Acceptance({ repositoryRoot, markdown, planMarkdo
   ) {
     throw new Error("release artifact table must cover the exact bundle inventory");
   }
+  const artifactsByPath = new Map(
+    manifest.artifacts.map((artifact) => [
+      `${manifest.bundlePath}/${artifact.relativePath}`,
+      artifact,
+    ]),
+  );
   for (const row of artifacts) {
     if (row.length !== 6 || row[2] !== path.posix.join(evidenceRoot, row[1])) {
       throw new Error(`artifact absolute path does not match repository path: ${row[1]}`);
     }
-    if (!Number.isSafeInteger(Number(row[3])) || Number(row[3]) <= 0) {
-      throw new Error(`artifact byte count is invalid: ${row[1]}`);
+    const artifact = artifactsByPath.get(row[1]);
+    if (
+      !artifact ||
+      row[3] !== String(artifact.bytes) ||
+      row[4] !== artifact.sha256 ||
+      row[5] !== artifact.fileType
+    ) {
+      throw new Error(`artifact manifest mismatch: ${row[1]}`);
     }
-    if (!/^[0-9a-f]{64}$/u.test(row[4]) || !row[5]) {
-      throw new Error(`artifact digest or file type is invalid: ${row[1]}`);
-    }
+  }
+
+  if (!same(tableAfterHeading(markdown, "## Version evidence"), reportVersionRows(manifest))) {
+    throw new Error("version manifest mismatch");
+  }
+  if (
+    !same(
+      tableAfterHeading(markdown, "## Mach-O inspection evidence"),
+      reportBinaryRows(manifest),
+    )
+  ) {
+    throw new Error("Mach-O inspection report does not match the manifest");
+  }
+  if (
+    !same(
+      tableAfterHeading(markdown, "## Mach-O dynamic dependencies"),
+      reportDependencyRows(manifest),
+    )
+  ) {
+    throw new Error("dynamic dependency report does not match the manifest");
+  }
+  const totals = manifest.symbolTotals;
+  if (
+    !same(tableAfterHeading(markdown, "## Symbol observation totals"), [
+      [
+        "All three Mach-O files",
+        String(totals.undefinedObservations),
+        String(totals.undefinedUnique),
+        String(totals.globalObservations),
+        String(totals.globalUnique),
+      ],
+    ])
+  ) {
+    throw new Error("symbol total report does not match the manifest");
   }
 
   for (const heading of ["## Known limitations", "## Phase 1 inputs", "## Minimal external action"]) {
@@ -127,21 +384,27 @@ export function validatePhase05Acceptance({ repositoryRoot, markdown, planMarkdo
   };
 }
 
+export async function loadPhase05Acceptance(repositoryRoot) {
+  const [markdown, planMarkdown, manifestText, declaredVersions] = await Promise.all([
+    readFile(path.join(repositoryRoot, "docs/development/PHASE-0.5-ACCEPTANCE.md"), "utf8"),
+    readFile(
+      path.join(repositoryRoot, "plans/2026-08-19-phase-0-5-infrastructure-v1.md"),
+      "utf8",
+    ),
+    readFile(
+      path.join(repositoryRoot, "docs/development/PHASE-0.5-ACCEPTANCE-EVIDENCE.json"),
+      "utf8",
+    ),
+    readPhase05DeclaredVersions(repositoryRoot),
+  ]);
+  return { repositoryRoot, markdown, planMarkdown, manifest: JSON.parse(manifestText), declaredVersions };
+}
+
 const scriptPath = fileURLToPath(import.meta.url);
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   const repositoryRoot = path.resolve(process.argv[2] ?? path.join(path.dirname(scriptPath), "../.."));
   try {
-    const result = validatePhase05Acceptance({
-      repositoryRoot,
-      markdown: await readFile(
-        path.join(repositoryRoot, "docs/development/PHASE-0.5-ACCEPTANCE.md"),
-        "utf8",
-      ),
-      planMarkdown: await readFile(
-        path.join(repositoryRoot, "plans/2026-08-19-phase-0-5-infrastructure-v1.md"),
-        "utf8",
-      ),
-    });
+    const result = validatePhase05Acceptance(await loadPhase05Acceptance(repositoryRoot));
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

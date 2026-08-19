@@ -4,6 +4,8 @@ This document records fresh local macOS arm64 evidence gathered on 2026-08-20.
 It is an acceptance draft, not a cross-platform sign-off. The checked-in
 [build workflow](../../.github/workflows/build.yml) has no real Windows run
 because this repository has no Git remote.
+The durable local package record is the generated
+[acceptance evidence manifest](PHASE-0.5-ACCEPTANCE-EVIDENCE.json).
 
 ## Gate status
 
@@ -38,6 +40,20 @@ The macOS `PASS` entries are local results only. They do not infer a Windows
 result. The authoritative protocol and ABI versions are in
 [`version.json`](../../core/contracts/version.json); the architecture and
 ownership boundaries are in [ARCHITECTURE.md](../architecture/ARCHITECTURE.md).
+
+## Version evidence
+
+| Component | Declared | Observed | Authority |
+| --- | --- | --- | --- |
+| Product | 0.0.0 | 0.0.0 | VERSION + apps/desktop/package.json + tauri.conf.json + bundle Info.plist |
+| Runtime | 0.0.0 | 0.0.0 | core/contracts/version.json |
+| IPC protocol | 1 | 1 | core/contracts/version.json |
+| VoiceEngine ABI | 1 | 1 | core/contracts/version.json |
+| Node.js | 24.16.0 | 24.16.0 | .node-version |
+| pnpm | 11.19.0 | 11.19.0 | package.json#packageManager |
+| Rust | 1.97.1 | 1.97.1 | rust-toolchain.toml |
+| CMake | 4.4.2 | 4.4.2 | .github/workflows/build.yml |
+| Ninja | 1.13.2 | 1.13.2 | .github/workflows/build.yml |
 
 ## Fresh local command evidence
 
@@ -88,8 +104,9 @@ interfaces, not on a prose keyword search:
    exactly arm64. The desktop uses system UI frameworks and system libraries;
    the sidecar uses only libc++ and libSystem; the plugin uses its own rpath
    install name plus libc++ and libSystem. Audited Python/PyTorch/CUDA/ONNX and
-   concrete audio-device dependencies/imports were absent from 2963 global and
-   457 undefined symbol observations.
+   concrete audio-device dependencies/imports were absent from 3,294 total
+   global observations (3,268 unique) and 457 total undefined observations
+   (433 unique).
 6. The tracked extension inventory contained no Python bytecode/source,
    static archive, model, or audio-media file. `audio/` and
    `core/model-package/` contain only ownership README files. The system
@@ -105,6 +122,56 @@ Its fixture suite also proves that an injected model/audio file, forbidden
 dynamic library, direct AI/audio-device symbol, symlink, missing artifact, or
 wrong architecture fails the gate.
 
+Regenerate the manifest only after a fresh Release staging and Tauri app build,
+or whenever bundle contents or the exact Node/pnpm/Rust/CMake/Ninja authorities
+change:
+
+```sh
+node tools/scripts/inspect-phase05-bundle.mjs "target/release/bundle/macos/AI Voice Studio.app" aarch64-apple-darwin --write-manifest docs/development/PHASE-0.5-ACCEPTANCE-EVIDENCE.json
+```
+
+The generator runs doctor and reads the repository declarations, bundle
+Info.plist, inventory, `file`, `lipo`, `otool`, and both `nm` modes before it
+writes JSON. The manifest intentionally contains no checkout-absolute path or
+generation timestamp, so identical evidence serializes identically.
+
+## Mach-O inspection evidence
+
+| Repository-relative path | Architecture | Dependency count | Undefined observations | Undefined unique | Global observations | Global unique | Inspection provenance |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | arm64 | 13 | 292 | 292 | 2624 | 2624 | lipo -archs; otool -L; nm -u; nm -g — completed |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/voice-runtime | arm64 | 2 | 161 | 161 | 665 | 665 | lipo -archs; otool -L; nm -u; nm -g — completed |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib | arm64 | 3 | 4 | 4 | 5 | 5 | lipo -archs; otool -L; nm -u; nm -g — completed |
+
+## Mach-O dynamic dependencies
+
+| Repository-relative binary | Dependency |
+| --- | --- |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /System/Library/Frameworks/WebKit.framework/Versions/A/WebKit |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /System/Library/Frameworks/Carbon.framework/Versions/A/Carbon |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /usr/lib/libSystem.B.dylib |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /System/Library/Frameworks/AppKit.framework/Versions/C/AppKit |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /System/Library/Frameworks/Foundation.framework/Versions/C/Foundation |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /usr/lib/libobjc.A.dylib |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /usr/lib/libiconv.2.dylib |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /System/Library/Frameworks/ColorSync.framework/Versions/A/ColorSync |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/voice-runtime | /usr/lib/libc++.1.dylib |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/voice-runtime | /usr/lib/libSystem.B.dylib |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib | @rpath/libaivs_mock_voice_engine.dylib |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib | /usr/lib/libc++.1.dylib |
+| target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib | /usr/lib/libSystem.B.dylib |
+
+## Symbol observation totals
+
+| Scope | Undefined observations | Undefined unique | Global observations | Global unique |
+| --- | --- | --- | --- | --- |
+| All three Mach-O files | 457 | 433 | 3294 | 3268 |
+
 ## Release bundle artifacts
 
 | Role | Repository-relative path | Absolute path | Bytes | SHA-256 | File type |
@@ -112,7 +179,7 @@ wrong architecture fails the gate.
 | Bundle metadata | target/release/bundle/macos/AI Voice Studio.app/Contents/Info.plist | /Users/alex/Documents/ChatGPT/AI翻唱/target/release/bundle/macos/AI Voice Studio.app/Contents/Info.plist | 1000 | cb73d729da55f14b514374da0c6c7f4f48b9af03651fe5a51c68420af85c3967 | XML 1.0 document text, ASCII text |
 | Desktop executable | target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | /Users/alex/Documents/ChatGPT/AI翻唱/target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | 11126720 | c33e5ab4f89491e453745b8568cbaff22b243404368f7477c7dc071b712134bd | Mach-O 64-bit executable arm64 |
 | Runtime sidecar | target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/voice-runtime | /Users/alex/Documents/ChatGPT/AI翻唱/target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/voice-runtime | 670464 | 3760d334380837366bcccd593e88ef85c1b2423a0c5898c2fd99eecff8696dd6 | Mach-O 64-bit executable arm64 |
-| Application icon | target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/AI Voice Studio.icns | /Users/alex/Documents/ChatGPT/AI翻唱/target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/AI Voice Studio.icns | 2245 | 8a5d5dd9e5d4278030f536935e19b98d62053eba97c05a1821cbeeae34dc025f | macOS icon data |
+| Application icon | target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/AI Voice Studio.icns | /Users/alex/Documents/ChatGPT/AI翻唱/target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/AI Voice Studio.icns | 2245 | 8a5d5dd9e5d4278030f536935e19b98d62053eba97c05a1821cbeeae34dc025f | Mac OS X icon, 2245 bytes, "icp6" type |
 | Product config | target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/config/config.json | /Users/alex/Documents/ChatGPT/AI翻唱/target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/config/config.json | 668 | 6a951523d63686a0e4fb46e315180414b047aeb2667074db99a9d5f90e9e5584 | JSON data |
 | Mock plugin | target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib | /Users/alex/Documents/ChatGPT/AI翻唱/target/release/bundle/macos/AI Voice Studio.app/Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib | 34736 | 88816039193e32b4f9affeed55a46f57b132c2a973272c8b4a0f2b3b5f2af76c | Mach-O 64-bit dynamically linked shared library arm64 |
 

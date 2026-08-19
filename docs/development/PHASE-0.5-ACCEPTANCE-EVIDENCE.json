@@ -1,0 +1,269 @@
+{
+  "schemaVersion": 1,
+  "target": "aarch64-apple-darwin",
+  "bundlePath": "target/release/bundle/macos/AI Voice Studio.app",
+  "artifacts": [
+    {
+      "relativePath": "Contents/Info.plist",
+      "bytes": 1000,
+      "sha256": "cb73d729da55f14b514374da0c6c7f4f48b9af03651fe5a51c68420af85c3967",
+      "fileType": "XML 1.0 document text, ASCII text"
+    },
+    {
+      "relativePath": "Contents/MacOS/ai-voice-studio",
+      "bytes": 11126720,
+      "sha256": "c33e5ab4f89491e453745b8568cbaff22b243404368f7477c7dc071b712134bd",
+      "fileType": "Mach-O 64-bit executable arm64"
+    },
+    {
+      "relativePath": "Contents/MacOS/voice-runtime",
+      "bytes": 670464,
+      "sha256": "3760d334380837366bcccd593e88ef85c1b2423a0c5898c2fd99eecff8696dd6",
+      "fileType": "Mach-O 64-bit executable arm64"
+    },
+    {
+      "relativePath": "Contents/Resources/AI Voice Studio.icns",
+      "bytes": 2245,
+      "sha256": "8a5d5dd9e5d4278030f536935e19b98d62053eba97c05a1821cbeeae34dc025f",
+      "fileType": "Mac OS X icon, 2245 bytes, \"icp6\" type"
+    },
+    {
+      "relativePath": "Contents/Resources/config/config.json",
+      "bytes": 668,
+      "sha256": "6a951523d63686a0e4fb46e315180414b047aeb2667074db99a9d5f90e9e5584",
+      "fileType": "JSON data"
+    },
+    {
+      "relativePath": "Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib",
+      "bytes": 34736,
+      "sha256": "88816039193e32b4f9affeed55a46f57b132c2a973272c8b4a0f2b3b5f2af76c",
+      "fileType": "Mach-O 64-bit dynamically linked shared library arm64"
+    }
+  ],
+  "binaries": [
+    {
+      "relativePath": "Contents/MacOS/ai-voice-studio",
+      "architectures": [
+        "arm64"
+      ],
+      "dependencies": [
+        "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
+        "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+        "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+        "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+        "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/usr/lib/libSystem.B.dylib",
+        "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/usr/lib/libobjc.A.dylib",
+        "/usr/lib/libiconv.2.dylib",
+        "/System/Library/Frameworks/ColorSync.framework/Versions/A/ColorSync",
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices"
+      ],
+      "symbolCounts": {
+        "undefinedObservations": 292,
+        "undefinedUnique": 292,
+        "globalObservations": 2624,
+        "globalUnique": 2624
+      },
+      "inspections": {
+        "architectures": {
+          "tool": "/usr/bin/lipo",
+          "arguments": [
+            "-archs"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        },
+        "dependencies": {
+          "tool": "/usr/bin/otool",
+          "arguments": [
+            "-L"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        },
+        "undefinedSymbols": {
+          "tool": "/usr/bin/nm",
+          "arguments": [
+            "-u"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        },
+        "globalSymbols": {
+          "tool": "/usr/bin/nm",
+          "arguments": [
+            "-g"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        }
+      }
+    },
+    {
+      "relativePath": "Contents/MacOS/voice-runtime",
+      "architectures": [
+        "arm64"
+      ],
+      "dependencies": [
+        "/usr/lib/libc++.1.dylib",
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "symbolCounts": {
+        "undefinedObservations": 161,
+        "undefinedUnique": 161,
+        "globalObservations": 665,
+        "globalUnique": 665
+      },
+      "inspections": {
+        "architectures": {
+          "tool": "/usr/bin/lipo",
+          "arguments": [
+            "-archs"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        },
+        "dependencies": {
+          "tool": "/usr/bin/otool",
+          "arguments": [
+            "-L"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        },
+        "undefinedSymbols": {
+          "tool": "/usr/bin/nm",
+          "arguments": [
+            "-u"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        },
+        "globalSymbols": {
+          "tool": "/usr/bin/nm",
+          "arguments": [
+            "-g"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        }
+      }
+    },
+    {
+      "relativePath": "Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib",
+      "architectures": [
+        "arm64"
+      ],
+      "dependencies": [
+        "@rpath/libaivs_mock_voice_engine.dylib",
+        "/usr/lib/libc++.1.dylib",
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "symbolCounts": {
+        "undefinedObservations": 4,
+        "undefinedUnique": 4,
+        "globalObservations": 5,
+        "globalUnique": 5
+      },
+      "inspections": {
+        "architectures": {
+          "tool": "/usr/bin/lipo",
+          "arguments": [
+            "-archs"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        },
+        "dependencies": {
+          "tool": "/usr/bin/otool",
+          "arguments": [
+            "-L"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        },
+        "undefinedSymbols": {
+          "tool": "/usr/bin/nm",
+          "arguments": [
+            "-u"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        },
+        "globalSymbols": {
+          "tool": "/usr/bin/nm",
+          "arguments": [
+            "-g"
+          ],
+          "evidencePresent": true,
+          "completed": true
+        }
+      }
+    }
+  ],
+  "symbolTotals": {
+    "undefinedObservations": 457,
+    "undefinedUnique": 433,
+    "globalObservations": 3294,
+    "globalUnique": 3268
+  },
+  "versions": {
+    "product": {
+      "declared": "0.0.0",
+      "observed": "0.0.0",
+      "authority": "VERSION + apps/desktop/package.json + tauri.conf.json + bundle Info.plist"
+    },
+    "runtime": {
+      "declared": "0.0.0",
+      "authority": "core/contracts/version.json",
+      "observed": "0.0.0"
+    },
+    "ipcProtocol": {
+      "declared": "1",
+      "authority": "core/contracts/version.json",
+      "observed": "1"
+    },
+    "voiceEngineAbi": {
+      "declared": "1",
+      "authority": "core/contracts/version.json",
+      "observed": "1"
+    },
+    "tools": {
+      "node": {
+        "declared": "24.16.0",
+        "authority": ".node-version",
+        "observed": "24.16.0"
+      },
+      "pnpm": {
+        "declared": "11.19.0",
+        "authority": "package.json#packageManager",
+        "observed": "11.19.0"
+      },
+      "rust": {
+        "declared": "1.97.1",
+        "authority": "rust-toolchain.toml",
+        "observed": "1.97.1"
+      },
+      "cmake": {
+        "declared": "4.4.2",
+        "authority": ".github/workflows/build.yml",
+        "observed": "4.4.2"
+      },
+      "ninja": {
+        "declared": "1.13.2",
+        "authority": ".github/workflows/build.yml",
+        "observed": "1.13.2"
+      }
+    }
+  },
+  "exclusions": {
+    "bundledPythonOrAiRuntime": false,
+    "bundledModelOrAudioAsset": false,
+    "forbiddenDynamicDependency": false,
+    "forbiddenRuntimeSymbol": false,
+    "nonArm64MachO": false
+  }
+}
