@@ -4,8 +4,10 @@
 #include <ai_voice_contracts/runtime_message_generated.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <new>
 #include <optional>
 #include <span>
 #include <utility>
@@ -36,6 +38,8 @@ enum class FrameErrorKind {
   ErrorCode,
   ErrorInvariant,
   PayloadTooLarge,
+  BatchTooLarge,
+  AllocationFailure,
   Truncated,
 };
 
@@ -70,6 +74,14 @@ constexpr FrameError too_large() {
   return {ErrorCode::FrameTooLarge, FrameErrorKind::PayloadTooLarge};
 }
 
+constexpr FrameError batch_too_large() {
+  return {ErrorCode::FrameTooLarge, FrameErrorKind::BatchTooLarge};
+}
+
+constexpr FrameError allocation_failure() {
+  return {ErrorCode::InternalError, FrameErrorKind::AllocationFailure};
+}
+
 inline std::uint16_t read_u16(std::span<const std::uint8_t> bytes, std::size_t offset) {
   return static_cast<std::uint16_t>(bytes[offset]) |
          (static_cast<std::uint16_t>(bytes[offset + 1U]) << 8U);
@@ -83,8 +95,12 @@ inline std::uint32_t read_u32(std::span<const std::uint8_t> bytes, std::size_t o
   return value;
 }
 
+constexpr std::int32_t decode_i32_bits(std::uint32_t bits) {
+  return std::bit_cast<std::int32_t>(bits);
+}
+
 inline std::int32_t read_i32(std::span<const std::uint8_t> bytes, std::size_t offset) {
-  return static_cast<std::int32_t>(read_u32(bytes, offset));
+  return decode_i32_bits(read_u32(bytes, offset));
 }
 
 inline std::uint64_t read_u64(std::span<const std::uint8_t> bytes, std::size_t offset) {
@@ -135,51 +151,31 @@ inline std::optional<FrameError> validate_message(
     return too_large();
   }
 
-  if (kind == MessageKind::Hello) {
-    if (request_id != 0U) {
-      return malformed(FrameErrorKind::RequestId);
-    }
-    if (command != Command::None) {
-      return malformed(FrameErrorKind::Command);
-    }
-    if (error_code != ErrorCode::Success) {
-      return malformed(FrameErrorKind::ErrorInvariant);
-    }
-  } else {
-    if (request_id == 0U) {
-      return malformed(FrameErrorKind::RequestId);
-    }
-    if (command == Command::None) {
-      return malformed(FrameErrorKind::Command);
-    }
-    if (kind == MessageKind::Request && error_code != ErrorCode::Success) {
-      return malformed(FrameErrorKind::ErrorInvariant);
-    }
+  const auto kind_policy = std::find_if(
+      kPolicies.begin(), kPolicies.end(), [kind](const Policy& policy) { return policy.kind == kind; });
+  const bool invalid_request_id =
+      kind_policy->request_id_rule == RequestIdRule::Zero ? request_id != 0U : request_id == 0U;
+  if (invalid_request_id) {
+    return malformed(FrameErrorKind::RequestId);
   }
-
-  std::size_t limit = kMaxControlPayloadBytes;
-  if (kind == MessageKind::Response && error_code != ErrorCode::Success) {
-    limit = kMaxErrorPayloadBytes;
-  } else {
-    switch (command) {
-      case Command::None:
-        limit = kMaxHelloPayloadBytes;
-        break;
-      case Command::Ping:
-        limit = kMaxPingPayloadBytes;
-        break;
-      case Command::GetCapabilities:
-        limit = kind == MessageKind::Request ? 0U : kMaxControlPayloadBytes;
-        break;
-      case Command::RunMockPipeline:
-        limit = kMaxControlPayloadBytes;
-        break;
-      case Command::Shutdown:
-        limit = 0U;
-        break;
-    }
+  const auto command_policy = std::find_if(
+      kPolicies.begin(), kPolicies.end(), [kind, command](const Policy& policy) {
+        return policy.kind == kind && policy.command == command;
+      });
+  if (command_policy == kPolicies.end()) {
+    return malformed(FrameErrorKind::Command);
   }
-  if (payload_length > limit) {
+  const auto error_rule =
+      error_code == ErrorCode::Success ? ErrorRule::Success : ErrorRule::NonSuccess;
+  const auto policy = std::find_if(
+      command_policy, kPolicies.end(), [kind, command, error_rule](const Policy& candidate) {
+        return candidate.kind == kind && candidate.command == command &&
+               candidate.error_rule == error_rule;
+      });
+  if (policy == kPolicies.end()) {
+    return malformed(FrameErrorKind::ErrorInvariant);
+  }
+  if (payload_length > policy->max_payload_bytes) {
     return too_large();
   }
   return std::nullopt;
@@ -276,47 +272,64 @@ class Decoder {
       result.error = failure_;
       return result;
     }
+    if (input.size() > kMaxInputBytesPerFeed) {
+      result.error = fail(detail::batch_too_large());
+      return result;
+    }
 
-    while (!input.empty()) {
-      if (!header_.has_value()) {
-        const auto needed = kHeaderSize - buffer_.size();
+    try {
+      while (!input.empty()) {
+        if (!header_.has_value()) {
+          const auto needed = kHeaderSize - buffer_.size();
+          const auto take = std::min(needed, input.size());
+          buffer_.insert(
+              buffer_.end(), input.begin(), input.begin() + static_cast<std::ptrdiff_t>(take));
+          input = input.subspan(take);
+          if (buffer_.size() < kHeaderSize) {
+            break;
+          }
+          const auto parsed = detail::parse_header(buffer_);
+          if (parsed.error.has_value()) {
+            std::vector<RuntimeMessage>().swap(result.messages);
+            result.error = fail(*parsed.error);
+            return result;
+          }
+          header_ = parsed.header;
+        }
+
+        const auto frame_size = kHeaderSize + header_->payload_length;
+        const auto needed = frame_size - buffer_.size();
         const auto take = std::min(needed, input.size());
-        buffer_.insert(buffer_.end(), input.begin(), input.begin() + static_cast<std::ptrdiff_t>(take));
+        buffer_.insert(
+            buffer_.end(), input.begin(), input.begin() + static_cast<std::ptrdiff_t>(take));
         input = input.subspan(take);
-        if (buffer_.size() < kHeaderSize) {
+        if (buffer_.size() < frame_size) {
           break;
         }
-        const auto parsed = detail::parse_header(buffer_);
-        if (parsed.error.has_value()) {
-          result.messages.clear();
-          result.error = fail(*parsed.error);
+
+        if (result.messages.size() >= kMaxMessagesPerFeed) {
+          std::vector<RuntimeMessage>().swap(result.messages);
+          result.error = fail(detail::batch_too_large());
           return result;
         }
-        header_ = parsed.header;
+        result.messages.push_back({
+            header_->kind,
+            header_->protocol_version,
+            header_->request_id,
+            header_->command,
+            header_->error_code,
+            std::vector<std::uint8_t>(
+                buffer_.begin() + static_cast<std::ptrdiff_t>(kHeaderSize), buffer_.end()),
+        });
+        buffer_.clear();
+        header_.reset();
       }
-
-      const auto frame_size = kHeaderSize + header_->payload_length;
-      const auto needed = frame_size - buffer_.size();
-      const auto take = std::min(needed, input.size());
-      buffer_.insert(buffer_.end(), input.begin(), input.begin() + static_cast<std::ptrdiff_t>(take));
-      input = input.subspan(take);
-      if (buffer_.size() < frame_size) {
-        break;
-      }
-
-      result.messages.push_back({
-          header_->kind,
-          header_->protocol_version,
-          header_->request_id,
-          header_->command,
-          header_->error_code,
-          std::vector<std::uint8_t>(buffer_.begin() + static_cast<std::ptrdiff_t>(kHeaderSize),
-                                    buffer_.end()),
-      });
-      buffer_.clear();
-      header_.reset();
+      return result;
+    } catch (const std::bad_alloc&) {
+      std::vector<RuntimeMessage>().swap(result.messages);
+      result.error = fail(detail::allocation_failure());
+      return result;
     }
-    return result;
   }
 
   std::optional<FrameError> finish() {
@@ -336,11 +349,12 @@ class Decoder {
   }
 
   [[nodiscard]] std::size_t buffered_size() const { return buffer_.size(); }
+  [[nodiscard]] std::size_t buffered_capacity() const { return buffer_.capacity(); }
   [[nodiscard]] bool failed() const { return failure_.has_value(); }
 
  private:
   FrameError fail(FrameError error) {
-    buffer_.clear();
+    std::vector<std::uint8_t>().swap(buffer_);
     header_.reset();
     failure_ = error;
     return error;

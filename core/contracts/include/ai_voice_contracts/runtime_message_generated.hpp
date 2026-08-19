@@ -16,6 +16,8 @@ inline constexpr std::uint16_t kWireVersion = 1U;
 inline constexpr std::size_t kHeaderSize = 32U;
 inline constexpr std::size_t kMaxControlPayloadBytes = 65536U;
 inline constexpr std::size_t kMaxFrameBytes = 65568U;
+inline constexpr std::size_t kMaxInputBytesPerFeed = 65568U;
+inline constexpr std::size_t kMaxMessagesPerFeed = 64U;
 inline constexpr std::size_t kMaxHelloPayloadBytes = 1024U;
 inline constexpr std::size_t kMaxErrorPayloadBytes = 4096U;
 inline constexpr std::size_t kMaxPingPayloadBytes = 256U;
@@ -53,5 +55,32 @@ constexpr std::optional<Command> command_from_value(std::uint16_t value) {
     default: return std::nullopt;
   }
 }
+
+enum class RequestIdRule { Zero, NonZero };
+enum class ErrorRule { Success, NonSuccess };
+
+struct Policy {
+  MessageKind kind;
+  Command command;
+  RequestIdRule request_id_rule;
+  ErrorRule error_rule;
+  std::size_t max_payload_bytes;
+};
+
+inline constexpr std::array<Policy, 13> kPolicies{{
+    Policy{MessageKind::Hello, Command::None, RequestIdRule::Zero, ErrorRule::Success, 1024U},
+    Policy{MessageKind::Request, Command::Ping, RequestIdRule::NonZero, ErrorRule::Success, 256U},
+    Policy{MessageKind::Request, Command::GetCapabilities, RequestIdRule::NonZero, ErrorRule::Success, 0U},
+    Policy{MessageKind::Request, Command::RunMockPipeline, RequestIdRule::NonZero, ErrorRule::Success, 65536U},
+    Policy{MessageKind::Request, Command::Shutdown, RequestIdRule::NonZero, ErrorRule::Success, 0U},
+    Policy{MessageKind::Response, Command::Ping, RequestIdRule::NonZero, ErrorRule::Success, 256U},
+    Policy{MessageKind::Response, Command::GetCapabilities, RequestIdRule::NonZero, ErrorRule::Success, 65536U},
+    Policy{MessageKind::Response, Command::RunMockPipeline, RequestIdRule::NonZero, ErrorRule::Success, 65536U},
+    Policy{MessageKind::Response, Command::Shutdown, RequestIdRule::NonZero, ErrorRule::Success, 0U},
+    Policy{MessageKind::Response, Command::Ping, RequestIdRule::NonZero, ErrorRule::NonSuccess, 4096U},
+    Policy{MessageKind::Response, Command::GetCapabilities, RequestIdRule::NonZero, ErrorRule::NonSuccess, 4096U},
+    Policy{MessageKind::Response, Command::RunMockPipeline, RequestIdRule::NonZero, ErrorRule::NonSuccess, 4096U},
+    Policy{MessageKind::Response, Command::Shutdown, RequestIdRule::NonZero, ErrorRule::NonSuccess, 4096U},
+}};
 
 }  // namespace ai_voice::contracts::runtime_message

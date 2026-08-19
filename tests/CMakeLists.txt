@@ -8,7 +8,7 @@ target_link_libraries(aivs_runtime_message_cpp_test PRIVATE ai_voice_contracts)
 target_compile_definitions(
   aivs_runtime_message_cpp_test
   PRIVATE
-    AIVS_RUNTIME_MESSAGE_FIXTURE="${PROJECT_SOURCE_DIR}/core/contracts/fixtures/runtime-message-v1-ping-request.hex"
+    AIVS_RUNTIME_MESSAGE_FIXTURE_DIRECTORY="${PROJECT_SOURCE_DIR}/core/contracts/fixtures"
 )
 add_test(NAME aivs_runtime_message_cpp_test COMMAND aivs_runtime_message_cpp_test)
 

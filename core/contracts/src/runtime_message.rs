@@ -4,9 +4,10 @@
 //! legal frame. It performs no process I/O or command dispatch.
 
 pub use crate::runtime_message_generated::{
-    Command, HEADER_SIZE, MAGIC, MAX_CONTROL_PAYLOAD_BYTES, MAX_ERROR_PAYLOAD_BYTES,
-    MAX_FRAME_BYTES, MAX_HELLO_PAYLOAD_BYTES, MAX_PING_PAYLOAD_BYTES, MessageKind,
-    RUNTIME_MESSAGE_SCHEMA_VERSION, WIRE_VERSION, command_from_value, message_kind_from_value,
+    Command, ErrorRule, HEADER_SIZE, MAGIC, MAX_CONTROL_PAYLOAD_BYTES, MAX_ERROR_PAYLOAD_BYTES,
+    MAX_FRAME_BYTES, MAX_HELLO_PAYLOAD_BYTES, MAX_INPUT_BYTES_PER_FEED, MAX_MESSAGES_PER_FEED,
+    MAX_PING_PAYLOAD_BYTES, MessageKind, POLICIES, Policy, RUNTIME_MESSAGE_SCHEMA_VERSION,
+    RequestIdRule, WIRE_VERSION, command_from_value, message_kind_from_value,
 };
 use crate::{ErrorCode, error_code_from_value, is_ipc_protocol_compatible};
 
@@ -33,6 +34,7 @@ pub enum FrameErrorKind {
     ErrorCode,
     ErrorInvariant,
     PayloadTooLarge,
+    BatchTooLarge,
     Truncated,
 }
 
@@ -61,6 +63,13 @@ impl FrameError {
         Self {
             code: ErrorCode::FrameTooLarge,
             kind: FrameErrorKind::PayloadTooLarge,
+        }
+    }
+
+    const fn batch_too_large() -> Self {
+        Self {
+            code: ErrorCode::FrameTooLarge,
+            kind: FrameErrorKind::BatchTooLarge,
         }
     }
 }
@@ -95,6 +104,9 @@ impl Decoder {
         if let Some(error) = self.failure {
             return Err(error);
         }
+        if input.len() > MAX_INPUT_BYTES_PER_FEED {
+            return Err(self.fail(FrameError::batch_too_large()));
+        }
 
         let mut messages = Vec::new();
         while !input.is_empty() {
@@ -122,6 +134,9 @@ impl Decoder {
                 break;
             }
 
+            if messages.len() >= MAX_MESSAGES_PER_FEED {
+                return Err(self.fail(FrameError::batch_too_large()));
+            }
             messages.push(RuntimeMessage {
                 kind: header.kind,
                 protocol_version: header.protocol_version,
@@ -156,12 +171,16 @@ impl Decoder {
         self.buffer.len()
     }
 
+    pub fn buffered_capacity(&self) -> usize {
+        self.buffer.capacity()
+    }
+
     pub fn is_failed(&self) -> bool {
         self.failure.is_some()
     }
 
     fn fail(&mut self, error: FrameError) -> FrameError {
-        self.buffer.clear();
+        self.buffer = Vec::new();
         self.header = None;
         self.failure = Some(error);
         error
@@ -255,43 +274,35 @@ fn validate_message(
         return Err(FrameError::too_large());
     }
 
-    match kind {
-        MessageKind::Hello => {
-            if request_id != 0 {
-                return Err(FrameError::malformed(FrameErrorKind::RequestId));
-            }
-            if command != Command::None {
-                return Err(FrameError::malformed(FrameErrorKind::Command));
-            }
-            if error_code != ErrorCode::Success {
-                return Err(FrameError::malformed(FrameErrorKind::ErrorInvariant));
-            }
-        }
-        MessageKind::Request | MessageKind::Response => {
-            if request_id == 0 {
-                return Err(FrameError::malformed(FrameErrorKind::RequestId));
-            }
-            if command == Command::None {
-                return Err(FrameError::malformed(FrameErrorKind::Command));
-            }
-            if kind == MessageKind::Request && error_code != ErrorCode::Success {
-                return Err(FrameError::malformed(FrameErrorKind::ErrorInvariant));
-            }
-        }
-    }
-
-    let limit = if kind == MessageKind::Response && error_code != ErrorCode::Success {
-        MAX_ERROR_PAYLOAD_BYTES
-    } else {
-        match command {
-            Command::None => MAX_HELLO_PAYLOAD_BYTES,
-            Command::Ping => MAX_PING_PAYLOAD_BYTES,
-            Command::GetCapabilities if kind == MessageKind::Request => 0,
-            Command::GetCapabilities | Command::RunMockPipeline => MAX_CONTROL_PAYLOAD_BYTES,
-            Command::Shutdown => 0,
-        }
+    let kind_policy = POLICIES
+        .iter()
+        .find(|policy| policy.kind == kind)
+        .expect("every generated message kind has a policy");
+    let invalid_request_id = match kind_policy.request_id_rule {
+        RequestIdRule::Zero => request_id != 0,
+        RequestIdRule::NonZero => request_id == 0,
     };
-    if payload_length > limit {
+    if invalid_request_id {
+        return Err(FrameError::malformed(FrameErrorKind::RequestId));
+    }
+    if !POLICIES
+        .iter()
+        .any(|policy| policy.kind == kind && policy.command == command)
+    {
+        return Err(FrameError::malformed(FrameErrorKind::Command));
+    }
+    let error_rule = if error_code == ErrorCode::Success {
+        ErrorRule::Success
+    } else {
+        ErrorRule::NonSuccess
+    };
+    let policy = POLICIES
+        .iter()
+        .find(|policy| {
+            policy.kind == kind && policy.command == command && policy.error_rule == error_rule
+        })
+        .ok_or_else(|| FrameError::malformed(FrameErrorKind::ErrorInvariant))?;
+    if payload_length > policy.max_payload_bytes {
         return Err(FrameError::too_large());
     }
     Ok(())

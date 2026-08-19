@@ -26,6 +26,8 @@
   "limits": {
     "max_control_payload_bytes": 65536,
     "max_frame_bytes": 65568,
+    "max_input_bytes_per_feed": 65568,
+    "max_messages_per_feed": 64,
     "max_hello_payload_bytes": 1024,
     "max_error_payload_bytes": 4096,
     "max_ping_payload_bytes": 256
@@ -42,6 +44,21 @@
     { "name": "RunMockPipeline", "value": 3 },
     { "name": "Shutdown", "value": 4 }
   ],
+  "policies": [
+    { "kind": "Hello", "command": "None", "request_id_rule": "zero", "error_rule": "success", "payload_limit": "max_hello_payload_bytes" },
+    { "kind": "Request", "command": "Ping", "request_id_rule": "nonzero", "error_rule": "success", "payload_limit": "max_ping_payload_bytes" },
+    { "kind": "Request", "command": "GetCapabilities", "request_id_rule": "nonzero", "error_rule": "success", "payload_limit": "zero" },
+    { "kind": "Request", "command": "RunMockPipeline", "request_id_rule": "nonzero", "error_rule": "success", "payload_limit": "max_control_payload_bytes" },
+    { "kind": "Request", "command": "Shutdown", "request_id_rule": "nonzero", "error_rule": "success", "payload_limit": "zero" },
+    { "kind": "Response", "command": "Ping", "request_id_rule": "nonzero", "error_rule": "success", "payload_limit": "max_ping_payload_bytes" },
+    { "kind": "Response", "command": "GetCapabilities", "request_id_rule": "nonzero", "error_rule": "success", "payload_limit": "max_control_payload_bytes" },
+    { "kind": "Response", "command": "RunMockPipeline", "request_id_rule": "nonzero", "error_rule": "success", "payload_limit": "max_control_payload_bytes" },
+    { "kind": "Response", "command": "Shutdown", "request_id_rule": "nonzero", "error_rule": "success", "payload_limit": "zero" },
+    { "kind": "Response", "command": "Ping", "request_id_rule": "nonzero", "error_rule": "non_success", "payload_limit": "max_error_payload_bytes" },
+    { "kind": "Response", "command": "GetCapabilities", "request_id_rule": "nonzero", "error_rule": "non_success", "payload_limit": "max_error_payload_bytes" },
+    { "kind": "Response", "command": "RunMockPipeline", "request_id_rule": "nonzero", "error_rule": "non_success", "payload_limit": "max_error_payload_bytes" },
+    { "kind": "Response", "command": "Shutdown", "request_id_rule": "nonzero", "error_rule": "non_success", "payload_limit": "max_error_payload_bytes" }
+  ],
   "invariants": {
     "hello": "request_id=0, command=None, error_code=Success",
     "request": "request_id!=0, command is a Phase 0.5 command, error_code=Success",
@@ -53,7 +70,7 @@
   "payload_semantics": {
     "encoding": "opaque command-owned control bytes; a later command contract may require UTF-8 JSON",
     "hello": "bounded negotiation metadata only",
-    "ping": "at most 256 request/response bytes",
+    "ping": "at most 256 success request/response bytes; error responses use the generic error limit",
     "get_capabilities": "empty request; bounded response control data",
     "run_mock_pipeline": "bounded parameters/result summary only; PCM, model bytes, and audio buffers are forbidden",
     "shutdown": "empty success request/response",
@@ -61,8 +78,16 @@
   },
   "decoder": {
     "fatal_errors": ["MalformedFrame", "FrameTooLarge", "UnsupportedProtocolVersion"],
+    "allocation_failure": {
+      "scope": "C++ decoder allocation",
+      "error_code": "InternalError",
+      "discard_current_input": true,
+      "release_partial_and_output_capacity": true,
+      "reset_required": true
+    },
     "failed_state": "after a fatal error, feed/eof repeat the original fatal framing error until explicit reset",
     "feed_atomicity": "a feed call containing a fatal frame returns no messages from that call",
+    "per_feed_limits": "each feed accepts at most max_input_bytes_per_feed and returns at most max_messages_per_feed",
     "retention": "retain at most one legal frame and reject oversized payload_length before body allocation",
     "eof": "empty boundary is clean; a partial header or body is MalformedFrame"
   },

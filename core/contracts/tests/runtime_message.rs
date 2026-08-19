@@ -4,19 +4,25 @@ use ai_voice_contracts::{
     ErrorCode, IPC_PROTOCOL_CURRENT_VERSION,
     runtime_message::{
         Command, Decoder, FrameErrorKind, HEADER_SIZE, MAX_CONTROL_PAYLOAD_BYTES,
-        MAX_ERROR_PAYLOAD_BYTES, MAX_FRAME_BYTES, MAX_HELLO_PAYLOAD_BYTES, MAX_PING_PAYLOAD_BYTES,
-        MessageKind, RuntimeMessage, encode,
+        MAX_ERROR_PAYLOAD_BYTES, MAX_FRAME_BYTES, MAX_HELLO_PAYLOAD_BYTES,
+        MAX_INPUT_BYTES_PER_FEED, MAX_MESSAGES_PER_FEED, MAX_PING_PAYLOAD_BYTES, MessageKind,
+        RuntimeMessage, encode,
     },
 };
 
-fn fixture() -> Vec<u8> {
+fn fixture_named(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/runtime-message-v1-ping-request.hex");
+        .join("fixtures")
+        .join(name);
     fs::read_to_string(path)
         .unwrap()
         .split_ascii_whitespace()
         .map(|byte| u8::from_str_radix(byte, 16).unwrap())
         .collect()
+}
+
+fn fixture() -> Vec<u8> {
+    fixture_named("runtime-message-v1-ping-request.hex")
 }
 
 fn request(command: Command, payload: Vec<u8>) -> RuntimeMessage {
@@ -41,6 +47,74 @@ fn consumes_the_shared_literal_fixture_and_matches_the_encoder() {
     assert_eq!(encode(&messages[0]).unwrap(), bytes);
     assert_eq!(decoder.buffered_len(), 0);
     assert!(!decoder.is_failed());
+}
+
+#[test]
+fn consumes_literal_fixtures_for_every_kind_and_command() {
+    let cases = [
+        (
+            "runtime-message-v1-hello.hex",
+            RuntimeMessage {
+                kind: MessageKind::Hello,
+                protocol_version: 1,
+                request_id: 0,
+                command: Command::None,
+                error_code: ErrorCode::Success,
+                payload: Vec::new(),
+            },
+        ),
+        (
+            "runtime-message-v1-get-capabilities-request.hex",
+            RuntimeMessage {
+                kind: MessageKind::Request,
+                protocol_version: 1,
+                request_id: 1,
+                command: Command::GetCapabilities,
+                error_code: ErrorCode::Success,
+                payload: Vec::new(),
+            },
+        ),
+        (
+            "runtime-message-v1-run-mock-pipeline-request.hex",
+            RuntimeMessage {
+                kind: MessageKind::Request,
+                protocol_version: 1,
+                request_id: 2,
+                command: Command::RunMockPipeline,
+                error_code: ErrorCode::Success,
+                payload: b"run".to_vec(),
+            },
+        ),
+        (
+            "runtime-message-v1-shutdown-request.hex",
+            RuntimeMessage {
+                kind: MessageKind::Request,
+                protocol_version: 1,
+                request_id: 3,
+                command: Command::Shutdown,
+                error_code: ErrorCode::Success,
+                payload: Vec::new(),
+            },
+        ),
+        (
+            "runtime-message-v1-ping-error-response.hex",
+            RuntimeMessage {
+                kind: MessageKind::Response,
+                protocol_version: 1,
+                request_id: 4,
+                command: Command::Ping,
+                error_code: ErrorCode::RuntimeUnavailable,
+                payload: vec![0; 257],
+            },
+        ),
+    ];
+
+    for (name, expected) in cases {
+        let bytes = fixture_named(name);
+        let mut decoder = Decoder::new();
+        assert_eq!(decoder.feed(&bytes).unwrap(), vec![expected.clone()]);
+        assert_eq!(encode(&expected).unwrap(), bytes);
+    }
 }
 
 #[test]
@@ -99,6 +173,38 @@ fn accepts_byte_chunks_and_multiple_sticky_frames() {
     combined.extend(second);
     assert_eq!(sticky.feed(&combined).unwrap().len(), 2);
     assert_eq!(sticky.finish(), Ok(()));
+}
+
+#[test]
+fn bounds_input_and_output_resources_per_feed() {
+    let hello = fixture_named("runtime-message-v1-hello.hex");
+    let many = hello.repeat(MAX_MESSAGES_PER_FEED);
+    let mut decoder = Decoder::new();
+    assert_eq!(decoder.feed(&many).unwrap().len(), MAX_MESSAGES_PER_FEED);
+
+    let too_many = hello.repeat(MAX_MESSAGES_PER_FEED + 1);
+    let mut decoder = Decoder::new();
+    let error = decoder.feed(&too_many).unwrap_err();
+    assert_eq!(error.code, ErrorCode::FrameTooLarge);
+    assert_eq!(error.kind, FrameErrorKind::BatchTooLarge);
+    assert_eq!(decoder.buffered_capacity(), 0);
+
+    let mut decoder = Decoder::new();
+    let oversized_input = vec![0; MAX_INPUT_BYTES_PER_FEED + 1];
+    let error = decoder.feed(&oversized_input).unwrap_err();
+    assert_eq!(error.kind, FrameErrorKind::BatchTooLarge);
+    assert_eq!(decoder.buffered_capacity(), 0);
+
+    let mut valid_then_fatal = hello.repeat(8);
+    let mut malformed = hello;
+    malformed[0] = 0;
+    valid_then_fatal.extend(malformed);
+    let mut decoder = Decoder::new();
+    assert_eq!(
+        decoder.feed(&valid_then_fatal).unwrap_err().kind,
+        FrameErrorKind::Magic
+    );
+    assert_eq!(decoder.buffered_capacity(), 0);
 }
 
 #[test]
@@ -179,6 +285,13 @@ fn rejects_malformed_header_and_message_invariants() {
     unknown_error[6] = MessageKind::Response as u8;
     unknown_error[24..28].copy_from_slice(&42_i32.to_le_bytes());
     let error = Decoder::new().feed(&unknown_error).unwrap_err();
+    assert_eq!(error.kind, FrameErrorKind::ErrorCode);
+
+    let mut high_bit_error = fixture();
+    high_bit_error[6] = MessageKind::Response as u8;
+    high_bit_error[24..28].copy_from_slice(&0x8000_0000_u32.to_le_bytes());
+    let error = Decoder::new().feed(&high_bit_error).unwrap_err();
+    assert_eq!(error.code, ErrorCode::MalformedFrame);
     assert_eq!(error.kind, FrameErrorKind::ErrorCode);
 
     let mut valid_then_bad = fixture();

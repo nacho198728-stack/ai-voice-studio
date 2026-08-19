@@ -227,6 +227,7 @@ function validateRuntimeMessageDocument(runtimeMessage) {
     "limits",
     "message_kinds",
     "commands",
+    "policies",
     "invariants",
     "payload_semantics",
     "decoder",
@@ -312,6 +313,8 @@ function validateRuntimeMessageDocument(runtimeMessage) {
   requireExactKeys(runtimeMessage.limits, "RuntimeMessage limits", [
     "max_control_payload_bytes",
     "max_frame_bytes",
+    "max_input_bytes_per_feed",
+    "max_messages_per_feed",
     "max_hello_payload_bytes",
     "max_error_payload_bytes",
     "max_ping_payload_bytes",
@@ -327,6 +330,19 @@ function validateRuntimeMessageDocument(runtimeMessage) {
   if (maxFrame !== headerSize + maxPayload) {
     fail("RuntimeMessage max_frame_bytes must equal header_size_bytes plus max_control_payload_bytes");
   }
+  const maxInputPerFeed = requireInteger(
+    runtimeMessage.limits.max_input_bytes_per_feed,
+    "RuntimeMessage max_input_bytes_per_feed",
+    { min: headerSize, max: 1024 * 1024 },
+  );
+  if (maxInputPerFeed !== maxFrame) {
+    fail("RuntimeMessage max_input_bytes_per_feed must equal max_frame_bytes in v1");
+  }
+  const maxMessagesPerFeed = requireInteger(
+    runtimeMessage.limits.max_messages_per_feed,
+    "RuntimeMessage max_messages_per_feed",
+    { min: 1, max: 1024 },
+  );
   const boundedLimit = (name) => {
     const value = requireInteger(runtimeMessage.limits[name], `RuntimeMessage ${name}`);
     if (value > maxPayload) {
@@ -357,16 +373,80 @@ function validateRuntimeMessageDocument(runtimeMessage) {
     });
   };
 
+  const kinds = validateEnum(runtimeMessage.message_kinds, RUNTIME_MESSAGE_KINDS, "message_kinds", 0xff);
+  const commands = validateEnum(runtimeMessage.commands, RUNTIME_MESSAGE_COMMANDS, "commands", 0xffff);
+  const expectedKindValues = [1, 2, 3];
+  const expectedCommandValues = [0, 1, 2, 3, 4];
+  if (
+    kinds.some((item, index) => item.value !== expectedKindValues[index]) ||
+    commands.some((item, index) => item.value !== expectedCommandValues[index])
+  ) {
+    fail("RuntimeMessage v1 numeric assignment is frozen; define a new wire version to renumber it");
+  }
+
+  const expectedPolicies = [
+    ["Hello", "None", "zero", "success", "max_hello_payload_bytes"],
+    ["Request", "Ping", "nonzero", "success", "max_ping_payload_bytes"],
+    ["Request", "GetCapabilities", "nonzero", "success", "zero"],
+    ["Request", "RunMockPipeline", "nonzero", "success", "max_control_payload_bytes"],
+    ["Request", "Shutdown", "nonzero", "success", "zero"],
+    ["Response", "Ping", "nonzero", "success", "max_ping_payload_bytes"],
+    ["Response", "GetCapabilities", "nonzero", "success", "max_control_payload_bytes"],
+    ["Response", "RunMockPipeline", "nonzero", "success", "max_control_payload_bytes"],
+    ["Response", "Shutdown", "nonzero", "success", "zero"],
+    ["Response", "Ping", "nonzero", "non_success", "max_error_payload_bytes"],
+    ["Response", "GetCapabilities", "nonzero", "non_success", "max_error_payload_bytes"],
+    ["Response", "RunMockPipeline", "nonzero", "non_success", "max_error_payload_bytes"],
+    ["Response", "Shutdown", "nonzero", "non_success", "max_error_payload_bytes"],
+  ];
+  if (!Array.isArray(runtimeMessage.policies) || runtimeMessage.policies.length !== expectedPolicies.length) {
+    fail("RuntimeMessage v1 policy matrix must contain every canonical kind/command/error rule");
+  }
+  const limitValues = {
+    zero: 0,
+    max_hello_payload_bytes: maxHello,
+    max_error_payload_bytes: maxError,
+    max_ping_payload_bytes: maxPing,
+    max_control_payload_bytes: maxPayload,
+  };
+  const policies = runtimeMessage.policies.map((policy, index) => {
+    requireExactKeys(policy, `RuntimeMessage policies[${index}]`, [
+      "kind",
+      "command",
+      "request_id_rule",
+      "error_rule",
+      "payload_limit",
+    ]);
+    const expected = expectedPolicies[index];
+    const actual = [
+      policy.kind,
+      policy.command,
+      policy.request_id_rule,
+      policy.error_rule,
+      policy.payload_limit,
+    ];
+    if (actual.some((value, fieldIndex) => value !== expected[fieldIndex])) {
+      fail("RuntimeMessage v1 policy matrix must match every canonical kind/command/error rule");
+    }
+    return {
+      kind: policy.kind,
+      command: policy.command,
+      requestIdRule: policy.request_id_rule,
+      errorRule: policy.error_rule,
+      maxPayload: limitValues[policy.payload_limit],
+    };
+  });
+
   const semanticSections = [
     ["invariants", runtimeMessage.invariants, ["hello", "request", "response", "success_response", "error_response", "unknown_values"]],
     ["payload_semantics", runtimeMessage.payload_semantics, ["encoding", "hello", "ping", "get_capabilities", "run_mock_pipeline", "shutdown", "error"]],
-    ["decoder", runtimeMessage.decoder, ["fatal_errors", "failed_state", "feed_atomicity", "retention", "eof"]],
+    ["decoder", runtimeMessage.decoder, ["fatal_errors", "allocation_failure", "failed_state", "feed_atomicity", "per_feed_limits", "retention", "eof"]],
     ["transport", runtimeMessage.transport, ["neutral", "stdout", "diagnostics"]],
   ];
   for (const [label, section, keys] of semanticSections) {
     requireExactKeys(section, `RuntimeMessage ${label}`, keys);
     for (const key of keys) {
-      if (label === "decoder" && key === "fatal_errors") {
+      if (label === "decoder" && (key === "fatal_errors" || key === "allocation_failure")) {
         continue;
       }
       if (label === "transport" && key === "neutral") {
@@ -389,6 +469,23 @@ function validateRuntimeMessageDocument(runtimeMessage) {
   ) {
     fail("RuntimeMessage decoder fatal_errors must contain the canonical framing error set");
   }
+  requireExactKeys(runtimeMessage.decoder.allocation_failure, "RuntimeMessage allocation_failure", [
+    "scope",
+    "error_code",
+    "discard_current_input",
+    "release_partial_and_output_capacity",
+    "reset_required",
+  ]);
+  const allocationFailure = runtimeMessage.decoder.allocation_failure;
+  if (
+    allocationFailure.scope !== "C++ decoder allocation" ||
+    allocationFailure.error_code !== "InternalError" ||
+    allocationFailure.discard_current_input !== true ||
+    allocationFailure.release_partial_and_output_capacity !== true ||
+    allocationFailure.reset_required !== true
+  ) {
+    fail("RuntimeMessage allocation_failure must use the canonical terminal InternalError policy");
+  }
   if (runtimeMessage.transport.neutral !== true) {
     fail("RuntimeMessage transport must remain neutral");
   }
@@ -400,11 +497,14 @@ function validateRuntimeMessageDocument(runtimeMessage) {
     headerSize,
     maxPayload,
     maxFrame,
+    maxInputPerFeed,
+    maxMessagesPerFeed,
     maxHello,
     maxError,
     maxPing,
-    kinds: validateEnum(runtimeMessage.message_kinds, RUNTIME_MESSAGE_KINDS, "message_kinds", 0xff),
-    commands: validateEnum(runtimeMessage.commands, RUNTIME_MESSAGE_COMMANDS, "commands", 0xffff),
+    kinds,
+    commands,
+    policies,
   };
 }
 
@@ -483,7 +583,7 @@ export function renderC(model) {
   );
 }
 
-export function renderRuntimeMessageRust(model) {
+function renderRuntimeMessageRustBase(model) {
   const message = model.runtimeMessage;
   const kinds = message.kinds.map((item) => `    ${item.name} = ${item.value},`).join("\n");
   const kindMatches = message.kinds
@@ -493,10 +593,24 @@ export function renderRuntimeMessageRust(model) {
   const commandMatches = message.commands
     .map((item) => `        ${item.value} => Some(Command::${item.name}),`)
     .join("\n");
-  return `// @generated by tools/scripts/contracts.mjs from ${SOURCE_DESCRIPTION}.\n// Do not edit manually; run \`pnpm contracts:generate\`.\n\npub const RUNTIME_MESSAGE_SCHEMA_VERSION: u32 = ${message.schemaVersion};\npub const MAGIC: [u8; 4] = *b${JSON.stringify(message.magic)};\npub const WIRE_VERSION: u16 = ${message.wireVersion};\npub const HEADER_SIZE: usize = ${message.headerSize};\npub const MAX_CONTROL_PAYLOAD_BYTES: usize = ${message.maxPayload};\npub const MAX_FRAME_BYTES: usize = ${message.maxFrame};\npub const MAX_HELLO_PAYLOAD_BYTES: usize = ${message.maxHello};\npub const MAX_ERROR_PAYLOAD_BYTES: usize = ${message.maxError};\npub const MAX_PING_PAYLOAD_BYTES: usize = ${message.maxPing};\n\n#[repr(u8)]\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum MessageKind {\n${kinds}\n}\n\npub const fn message_kind_from_value(value: u8) -> Option<MessageKind> {\n    match value {\n${kindMatches}\n        _ => None,\n    }\n}\n\n#[repr(u16)]\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum Command {\n${commands}\n}\n\npub const fn command_from_value(value: u16) -> Option<Command> {\n    match value {\n${commandMatches}\n        _ => None,\n    }\n}\n`;
+  const policies = message.policies
+    .map(
+      (policy) =>
+        `    Policy {\n        kind: MessageKind::${policy.kind},\n        command: Command::${policy.command},\n        request_id_rule: RequestIdRule::${policy.requestIdRule === "zero" ? "Zero" : "NonZero"},\n        error_rule: ErrorRule::${policy.errorRule === "success" ? "Success" : "NonSuccess"},\n        max_payload_bytes: ${policy.maxPayload},\n    },`,
+    )
+    .join("\n");
+  return `// @generated by tools/scripts/contracts.mjs from ${SOURCE_DESCRIPTION}.\n// Do not edit manually; run \`pnpm contracts:generate\`.\n\npub const RUNTIME_MESSAGE_SCHEMA_VERSION: u32 = ${message.schemaVersion};\npub const MAGIC: [u8; 4] = *b${JSON.stringify(message.magic)};\npub const WIRE_VERSION: u16 = ${message.wireVersion};\npub const HEADER_SIZE: usize = ${message.headerSize};\npub const MAX_CONTROL_PAYLOAD_BYTES: usize = ${message.maxPayload};\npub const MAX_FRAME_BYTES: usize = ${message.maxFrame};\npub const MAX_HELLO_PAYLOAD_BYTES: usize = ${message.maxHello};\npub const MAX_ERROR_PAYLOAD_BYTES: usize = ${message.maxError};\npub const MAX_PING_PAYLOAD_BYTES: usize = ${message.maxPing};\n\n#[repr(u8)]\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum MessageKind {\n${kinds}\n}\n\npub const fn message_kind_from_value(value: u8) -> Option<MessageKind> {\n    match value {\n${kindMatches}\n        _ => None,\n    }\n}\n\n#[repr(u16)]\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum Command {\n${commands}\n}\n\npub const fn command_from_value(value: u16) -> Option<Command> {\n    match value {\n${commandMatches}\n        _ => None,\n    }\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum RequestIdRule {\n    Zero,\n    NonZero,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ErrorRule {\n    Success,\n    NonSuccess,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct Policy {\n    pub kind: MessageKind,\n    pub command: Command,\n    pub request_id_rule: RequestIdRule,\n    pub error_rule: ErrorRule,\n    pub max_payload_bytes: usize,\n}\n\npub const POLICIES: [Policy; ${message.policies.length}] = [\n${policies}\n];\n`;
 }
 
-export function renderRuntimeMessageCpp(model) {
+export function renderRuntimeMessageRust(model) {
+  const message = model.runtimeMessage;
+  return renderRuntimeMessageRustBase(model).replace(
+    `pub const MAX_FRAME_BYTES: usize = ${message.maxFrame};`,
+    `pub const MAX_FRAME_BYTES: usize = ${message.maxFrame};\npub const MAX_INPUT_BYTES_PER_FEED: usize = ${message.maxInputPerFeed};\npub const MAX_MESSAGES_PER_FEED: usize = ${message.maxMessagesPerFeed};`,
+  );
+}
+
+function renderRuntimeMessageCppBase(model) {
   const message = model.runtimeMessage;
   const magic = [...message.magic].map((byte) => `'${byte}'`).join(", ");
   const kinds = message.kinds.map((item) => `  ${item.name} = ${item.value},`).join("\n");
@@ -507,7 +621,21 @@ export function renderRuntimeMessageCpp(model) {
   const commandMatches = message.commands
     .map((item) => `    case ${item.value}: return Command::${item.name};`)
     .join("\n");
-  return `// @generated by tools/scripts/contracts.mjs from ${SOURCE_DESCRIPTION}.\n// Do not edit manually; run \`pnpm contracts:generate\`.\n\n#pragma once\n\n#include <array>\n#include <cstddef>\n#include <cstdint>\n#include <optional>\n\nnamespace ai_voice::contracts::runtime_message {\n\ninline constexpr std::uint32_t kRuntimeMessageSchemaVersion = ${message.schemaVersion}U;\ninline constexpr std::array<std::uint8_t, 4> kMagic{${magic}};\ninline constexpr std::uint16_t kWireVersion = ${message.wireVersion}U;\ninline constexpr std::size_t kHeaderSize = ${message.headerSize}U;\ninline constexpr std::size_t kMaxControlPayloadBytes = ${message.maxPayload}U;\ninline constexpr std::size_t kMaxFrameBytes = ${message.maxFrame}U;\ninline constexpr std::size_t kMaxHelloPayloadBytes = ${message.maxHello}U;\ninline constexpr std::size_t kMaxErrorPayloadBytes = ${message.maxError}U;\ninline constexpr std::size_t kMaxPingPayloadBytes = ${message.maxPing}U;\n\nenum class MessageKind : std::uint8_t {\n${kinds}\n};\n\nconstexpr std::optional<MessageKind> message_kind_from_value(std::uint8_t value) {\n  switch (value) {\n${kindMatches}\n    default: return std::nullopt;\n  }\n}\n\nenum class Command : std::uint16_t {\n${commands}\n};\n\nconstexpr std::optional<Command> command_from_value(std::uint16_t value) {\n  switch (value) {\n${commandMatches}\n    default: return std::nullopt;\n  }\n}\n\n}  // namespace ai_voice::contracts::runtime_message\n`;
+  const policies = message.policies
+    .map(
+      (policy) =>
+        `    Policy{MessageKind::${policy.kind}, Command::${policy.command}, RequestIdRule::${policy.requestIdRule === "zero" ? "Zero" : "NonZero"}, ErrorRule::${policy.errorRule === "success" ? "Success" : "NonSuccess"}, ${policy.maxPayload}U},`,
+    )
+    .join("\n");
+  return `// @generated by tools/scripts/contracts.mjs from ${SOURCE_DESCRIPTION}.\n// Do not edit manually; run \`pnpm contracts:generate\`.\n\n#pragma once\n\n#include <array>\n#include <cstddef>\n#include <cstdint>\n#include <optional>\n\nnamespace ai_voice::contracts::runtime_message {\n\ninline constexpr std::uint32_t kRuntimeMessageSchemaVersion = ${message.schemaVersion}U;\ninline constexpr std::array<std::uint8_t, 4> kMagic{${magic}};\ninline constexpr std::uint16_t kWireVersion = ${message.wireVersion}U;\ninline constexpr std::size_t kHeaderSize = ${message.headerSize}U;\ninline constexpr std::size_t kMaxControlPayloadBytes = ${message.maxPayload}U;\ninline constexpr std::size_t kMaxFrameBytes = ${message.maxFrame}U;\ninline constexpr std::size_t kMaxHelloPayloadBytes = ${message.maxHello}U;\ninline constexpr std::size_t kMaxErrorPayloadBytes = ${message.maxError}U;\ninline constexpr std::size_t kMaxPingPayloadBytes = ${message.maxPing}U;\n\nenum class MessageKind : std::uint8_t {\n${kinds}\n};\n\nconstexpr std::optional<MessageKind> message_kind_from_value(std::uint8_t value) {\n  switch (value) {\n${kindMatches}\n    default: return std::nullopt;\n  }\n}\n\nenum class Command : std::uint16_t {\n${commands}\n};\n\nconstexpr std::optional<Command> command_from_value(std::uint16_t value) {\n  switch (value) {\n${commandMatches}\n    default: return std::nullopt;\n  }\n}\n\nenum class RequestIdRule { Zero, NonZero };\nenum class ErrorRule { Success, NonSuccess };\n\nstruct Policy {\n  MessageKind kind;\n  Command command;\n  RequestIdRule request_id_rule;\n  ErrorRule error_rule;\n  std::size_t max_payload_bytes;\n};\n\ninline constexpr std::array<Policy, ${message.policies.length}> kPolicies{{\n${policies}\n}};\n\n}  // namespace ai_voice::contracts::runtime_message\n`;
+}
+
+export function renderRuntimeMessageCpp(model) {
+  const message = model.runtimeMessage;
+  return renderRuntimeMessageCppBase(model).replace(
+    `inline constexpr std::size_t kMaxFrameBytes = ${message.maxFrame}U;`,
+    `inline constexpr std::size_t kMaxFrameBytes = ${message.maxFrame}U;\ninline constexpr std::size_t kMaxInputBytesPerFeed = ${message.maxInputPerFeed}U;\ninline constexpr std::size_t kMaxMessagesPerFeed = ${message.maxMessagesPerFeed}U;`,
+  );
 }
 
 function pathsFor(root) {

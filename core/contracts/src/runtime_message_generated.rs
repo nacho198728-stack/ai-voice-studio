@@ -7,6 +7,8 @@ pub const WIRE_VERSION: u16 = 1;
 pub const HEADER_SIZE: usize = 32;
 pub const MAX_CONTROL_PAYLOAD_BYTES: usize = 65536;
 pub const MAX_FRAME_BYTES: usize = 65568;
+pub const MAX_INPUT_BYTES_PER_FEED: usize = 65568;
+pub const MAX_MESSAGES_PER_FEED: usize = 64;
 pub const MAX_HELLO_PAYLOAD_BYTES: usize = 1024;
 pub const MAX_ERROR_PAYLOAD_BYTES: usize = 4096;
 pub const MAX_PING_PAYLOAD_BYTES: usize = 256;
@@ -48,3 +50,118 @@ pub const fn command_from_value(value: u16) -> Option<Command> {
         _ => None,
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RequestIdRule {
+    Zero,
+    NonZero,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ErrorRule {
+    Success,
+    NonSuccess,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Policy {
+    pub kind: MessageKind,
+    pub command: Command,
+    pub request_id_rule: RequestIdRule,
+    pub error_rule: ErrorRule,
+    pub max_payload_bytes: usize,
+}
+
+pub const POLICIES: [Policy; 13] = [
+    Policy {
+        kind: MessageKind::Hello,
+        command: Command::None,
+        request_id_rule: RequestIdRule::Zero,
+        error_rule: ErrorRule::Success,
+        max_payload_bytes: 1024,
+    },
+    Policy {
+        kind: MessageKind::Request,
+        command: Command::Ping,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::Success,
+        max_payload_bytes: 256,
+    },
+    Policy {
+        kind: MessageKind::Request,
+        command: Command::GetCapabilities,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::Success,
+        max_payload_bytes: 0,
+    },
+    Policy {
+        kind: MessageKind::Request,
+        command: Command::RunMockPipeline,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::Success,
+        max_payload_bytes: 65536,
+    },
+    Policy {
+        kind: MessageKind::Request,
+        command: Command::Shutdown,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::Success,
+        max_payload_bytes: 0,
+    },
+    Policy {
+        kind: MessageKind::Response,
+        command: Command::Ping,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::Success,
+        max_payload_bytes: 256,
+    },
+    Policy {
+        kind: MessageKind::Response,
+        command: Command::GetCapabilities,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::Success,
+        max_payload_bytes: 65536,
+    },
+    Policy {
+        kind: MessageKind::Response,
+        command: Command::RunMockPipeline,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::Success,
+        max_payload_bytes: 65536,
+    },
+    Policy {
+        kind: MessageKind::Response,
+        command: Command::Shutdown,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::Success,
+        max_payload_bytes: 0,
+    },
+    Policy {
+        kind: MessageKind::Response,
+        command: Command::Ping,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::NonSuccess,
+        max_payload_bytes: 4096,
+    },
+    Policy {
+        kind: MessageKind::Response,
+        command: Command::GetCapabilities,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::NonSuccess,
+        max_payload_bytes: 4096,
+    },
+    Policy {
+        kind: MessageKind::Response,
+        command: Command::RunMockPipeline,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::NonSuccess,
+        max_payload_bytes: 4096,
+    },
+    Policy {
+        kind: MessageKind::Response,
+        command: Command::Shutdown,
+        request_id_rule: RequestIdRule::NonZero,
+        error_rule: ErrorRule::NonSuccess,
+        max_payload_bytes: 4096,
+    },
+];

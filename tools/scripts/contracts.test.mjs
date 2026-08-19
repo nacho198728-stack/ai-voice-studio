@@ -139,7 +139,11 @@ test("generate produces repeatable mappings accepted by read-only check", (t) =>
   assert.match(firstC, /AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION/);
   assert.match(firstC, /AIVS_ERROR_INVALID_ARGUMENT/);
   assert.match(firstRuntimeRust, /pub const HEADER_SIZE: usize = 32/);
+  assert.match(firstRuntimeRust, /pub const MAX_MESSAGES_PER_FEED: usize = 64/);
+  assert.match(firstRuntimeRust, /pub const POLICIES:/);
   assert.match(firstRuntimeCpp, /kMaxControlPayloadBytes = 65536U/);
+  assert.match(firstRuntimeCpp, /kMaxInputBytesPerFeed = 65568U/);
+  assert.match(firstRuntimeCpp, /kPolicies/);
 });
 
 test("check rejects malformed RuntimeMessage layout and limits", (t) => {
@@ -153,15 +157,42 @@ test("check rejects malformed RuntimeMessage layout and limits", (t) => {
   const wrongFrameSizeRoot = fixture(t, { runtimeMessage: wrongFrameSize });
   assert.match(runFailure(wrongFrameSizeRoot, "check"), /max_frame_bytes/);
 
+  const unboundedBatch = validRuntimeMessage();
+  delete unboundedBatch.limits.max_messages_per_feed;
+  const unboundedBatchRoot = fixture(t, { runtimeMessage: unboundedBatch });
+  assert.match(runFailure(unboundedBatchRoot, "generate"), /max_messages_per_feed/);
+
   const duplicateCommand = validRuntimeMessage();
   duplicateCommand.commands[2].value = 1;
   const duplicateCommandRoot = fixture(t, { runtimeMessage: duplicateCommand });
   assert.match(runFailure(duplicateCommandRoot, "check"), /duplicate command value/);
 
+  for (const [collection, length] of [
+    ["message_kinds", 3],
+    ["commands", 5],
+  ]) {
+    for (let index = 0; index < length; index += 1) {
+      const renumbered = validRuntimeMessage();
+      renumbered[collection][index].value = 100 + index;
+      const renumberedRoot = fixture(t, { runtimeMessage: renumbered });
+      assert.match(runFailure(renumberedRoot, "generate"), /v1 numeric assignment/);
+    }
+  }
+
+  const incompletePolicy = validRuntimeMessage();
+  incompletePolicy.policies.pop();
+  const incompletePolicyRoot = fixture(t, { runtimeMessage: incompletePolicy });
+  assert.match(runFailure(incompletePolicyRoot, "generate"), /policy matrix/);
+
   const wrongFatalErrors = validRuntimeMessage();
   wrongFatalErrors.decoder.fatal_errors = ["InvalidState"];
   const wrongFatalErrorsRoot = fixture(t, { runtimeMessage: wrongFatalErrors });
   assert.match(runFailure(wrongFatalErrorsRoot, "generate"), /fatal_errors/);
+
+  const unstableAllocationFailure = validRuntimeMessage();
+  unstableAllocationFailure.decoder.allocation_failure.error_code = "MalformedFrame";
+  const unstableAllocationFailureRoot = fixture(t, { runtimeMessage: unstableAllocationFailure });
+  assert.match(runFailure(unstableAllocationFailureRoot, "generate"), /allocation_failure/);
 });
 
 test("check detects stale generated output without rewriting it", (t) => {

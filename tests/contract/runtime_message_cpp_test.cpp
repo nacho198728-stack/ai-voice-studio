@@ -2,10 +2,13 @@
 #undef NDEBUG
 #endif
 #include <cassert>
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <limits>
+#include <new>
 #include <span>
 #include <sstream>
 #include <string>
@@ -13,13 +16,64 @@
 
 #include <ai_voice_contracts/runtime_message.hpp>
 
+namespace allocation_fault {
+
+thread_local std::size_t countdown = std::numeric_limits<std::size_t>::max();
+
+void fail_after(std::size_t successful_allocations) {
+  countdown = successful_allocations;
+}
+
+void disable() {
+  countdown = std::numeric_limits<std::size_t>::max();
+}
+
+}  // namespace allocation_fault
+
+void* operator new(std::size_t size) {
+  if (allocation_fault::countdown != std::numeric_limits<std::size_t>::max()) {
+    if (allocation_fault::countdown == 0U) {
+      allocation_fault::disable();
+      throw std::bad_alloc();
+    }
+    --allocation_fault::countdown;
+  }
+  if (void* pointer = std::malloc(size == 0U ? 1U : size)) {
+    return pointer;
+  }
+  throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size) {
+  return ::operator new(size);
+}
+
+void operator delete(void* pointer) noexcept {
+  std::free(pointer);
+}
+
+void operator delete[](void* pointer) noexcept {
+  std::free(pointer);
+}
+
+void operator delete(void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+
+void operator delete[](void* pointer, std::size_t) noexcept {
+  std::free(pointer);
+}
+
 namespace message = ai_voice::contracts::runtime_message;
 using ai_voice::contracts::ErrorCode;
 
+static_assert(message::detail::decode_i32_bits(UINT32_C(0x80000000)) ==
+              std::numeric_limits<std::int32_t>::min());
+
 namespace {
 
-std::vector<std::uint8_t> fixture() {
-  std::ifstream input(AIVS_RUNTIME_MESSAGE_FIXTURE);
+std::vector<std::uint8_t> fixture_named(const std::string& name) {
+  std::ifstream input(std::string(AIVS_RUNTIME_MESSAGE_FIXTURE_DIRECTORY) + "/" + name);
   assert(input.good());
   std::vector<std::uint8_t> bytes;
   std::string token;
@@ -27,6 +81,10 @@ std::vector<std::uint8_t> fixture() {
     bytes.push_back(static_cast<std::uint8_t>(std::stoul(token, nullptr, 16)));
   }
   return bytes;
+}
+
+std::vector<std::uint8_t> fixture() {
+  return fixture_named("runtime-message-v1-ping-request.hex");
 }
 
 message::RuntimeMessage request(message::Command command, std::vector<std::uint8_t> payload = {}) {
@@ -82,6 +140,47 @@ void shared_fixture_and_round_trip() {
   }
 }
 
+void all_literal_kinds_and_commands() {
+  const std::vector<std::pair<std::string, message::RuntimeMessage>> cases{
+      {"runtime-message-v1-hello.hex",
+       {message::MessageKind::Hello, 1U, 0U, message::Command::None, ErrorCode::Success, {}}},
+      {"runtime-message-v1-get-capabilities-request.hex",
+       {message::MessageKind::Request,
+        1U,
+        1U,
+        message::Command::GetCapabilities,
+        ErrorCode::Success,
+        {}}},
+      {"runtime-message-v1-run-mock-pipeline-request.hex",
+       {message::MessageKind::Request,
+        1U,
+        2U,
+        message::Command::RunMockPipeline,
+        ErrorCode::Success,
+        {'r', 'u', 'n'}}},
+      {"runtime-message-v1-shutdown-request.hex",
+       {message::MessageKind::Request,
+        1U,
+        3U,
+        message::Command::Shutdown,
+        ErrorCode::Success,
+        {}}},
+      {"runtime-message-v1-ping-error-response.hex",
+       {message::MessageKind::Response,
+        1U,
+        4U,
+        message::Command::Ping,
+        ErrorCode::RuntimeUnavailable,
+        std::vector<std::uint8_t>(257U)}},
+  };
+  for (const auto& [name, expected] : cases) {
+    const auto bytes = fixture_named(name);
+    message::Decoder decoder;
+    assert(decoder.feed(bytes).messages == std::vector<message::RuntimeMessage>{expected});
+    assert(message::encode(expected).bytes == bytes);
+  }
+}
+
 void chunking_sticky_and_eof() {
   const auto bytes = fixture();
   message::Decoder bytewise;
@@ -109,6 +208,80 @@ void chunking_sticky_and_eof() {
     assert(error->code == ErrorCode::MalformedFrame);
     assert(error->kind == message::FrameErrorKind::Truncated);
   }
+}
+
+void bounded_feed_resources() {
+  const auto hello = fixture_named("runtime-message-v1-hello.hex");
+  std::vector<std::uint8_t> many;
+  for (std::size_t index = 0; index < message::kMaxMessagesPerFeed; ++index) {
+    many.insert(many.end(), hello.begin(), hello.end());
+  }
+  message::Decoder decoder;
+  assert(decoder.feed(many).messages.size() == message::kMaxMessagesPerFeed);
+
+  many.insert(many.end(), hello.begin(), hello.end());
+  message::Decoder too_many_decoder;
+  const auto too_many = too_many_decoder.feed(many);
+  assert(too_many.error->code == ErrorCode::FrameTooLarge);
+  assert(too_many.error->kind == message::FrameErrorKind::BatchTooLarge);
+  assert(too_many.messages.capacity() == 0U);
+  assert(too_many_decoder.buffered_capacity() == 0U);
+
+  message::Decoder oversized_decoder;
+  const auto oversized = oversized_decoder.feed(
+      std::vector<std::uint8_t>(message::kMaxInputBytesPerFeed + 1U));
+  assert(oversized.error->kind == message::FrameErrorKind::BatchTooLarge);
+  assert(oversized.messages.capacity() == 0U);
+  assert(oversized_decoder.buffered_capacity() == 0U);
+
+  std::vector<std::uint8_t> valid_then_fatal;
+  for (std::size_t index = 0; index < 8U; ++index) {
+    valid_then_fatal.insert(valid_then_fatal.end(), hello.begin(), hello.end());
+  }
+  auto malformed = hello;
+  malformed[0] = 0U;
+  valid_then_fatal.insert(valid_then_fatal.end(), malformed.begin(), malformed.end());
+  message::Decoder fatal_decoder;
+  const auto fatal = fatal_decoder.feed(valid_then_fatal);
+  assert(fatal.error->kind == message::FrameErrorKind::Magic);
+  assert(fatal.messages.capacity() == 0U);
+  assert(fatal_decoder.buffered_capacity() == 0U);
+}
+
+void allocation_failures_are_terminal_and_release_resources() {
+  const auto hello = fixture_named("runtime-message-v1-hello.hex");
+  auto body_frame = message::encode(
+      request(message::Command::RunMockPipeline, std::vector<std::uint8_t>(128U)))
+                        .bytes;
+
+  const auto exercise = [](message::Decoder& decoder,
+                           std::span<const std::uint8_t> input,
+                           std::size_t successful_allocations) {
+    allocation_fault::fail_after(successful_allocations);
+    const auto result = decoder.feed(input);
+    allocation_fault::disable();
+    assert(result.error->code == ErrorCode::InternalError);
+    assert(result.error->kind == message::FrameErrorKind::AllocationFailure);
+    assert(result.messages.capacity() == 0U);
+    assert(decoder.buffered_capacity() == 0U);
+    assert(decoder.failed());
+    assert(decoder.feed({}).error == result.error);
+  };
+
+  message::Decoder header_growth;
+  exercise(header_growth, std::span<const std::uint8_t>(hello.data(), 1U), 0U);
+
+  message::Decoder body_growth;
+  exercise(body_growth, body_frame, 1U);
+
+  message::Decoder payload_materialization;
+  exercise(payload_materialization, body_frame, 2U);
+
+  message::Decoder result_growth;
+  exercise(result_growth, hello, 1U);
+
+  result_growth.reset();
+  assert(result_growth.feed(hello).messages.size() == 1U);
 }
 
 void malformed_and_failed_state() {
@@ -146,6 +319,17 @@ void malformed_and_failed_state() {
   unknown_error[27] = 0U;
   message::Decoder unknown_error_decoder;
   assert(unknown_error_decoder.feed(unknown_error).error->kind == message::FrameErrorKind::ErrorCode);
+
+  auto high_bit_error = fixture();
+  high_bit_error[6] = static_cast<std::uint8_t>(message::MessageKind::Response);
+  high_bit_error[24] = 0U;
+  high_bit_error[25] = 0U;
+  high_bit_error[26] = 0U;
+  high_bit_error[27] = 0x80U;
+  message::Decoder high_bit_decoder;
+  const auto high_bit_result = high_bit_decoder.feed(high_bit_error);
+  assert(high_bit_result.error->code == ErrorCode::MalformedFrame);
+  assert(high_bit_result.error->kind == message::FrameErrorKind::ErrorCode);
 
   auto valid_then_bad = fixture();
   valid_then_bad.insert(valid_then_bad.end(), unknown_error.begin(), unknown_error.end());
@@ -238,7 +422,10 @@ void encode_limits_and_invariants() {
 
 int main() {
   shared_fixture_and_round_trip();
+  all_literal_kinds_and_commands();
   chunking_sticky_and_eof();
+  bounded_feed_resources();
+  allocation_failures_are_terminal_and_release_resources();
   malformed_and_failed_state();
   encode_limits_and_invariants();
   return 0;
