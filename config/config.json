@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "runtime": {
+    "handshake_timeout_ms": 2000,
+    "request_timeout_ms": 2000,
+    "shutdown_timeout_ms": 2000,
+    "max_in_flight": 16,
+    "command_queue_capacity": 32,
+    "event_queue_capacity": 32,
+    "stderr_tail_bytes": 8192,
+    "restart_max_attempts": 0
+  },
+  "backend": {
+    "kind": "mock",
+    "mock": {
+      "work_iterations": 0
+    }
+  },
+  "debug": {
+    "enabled": false,
+    "log_level": "info"
+  },
+  "audio": {
+    "enabled": false,
+    "input_device": "unconfigured",
+    "output_device": "unconfigured",
+    "sample_rate_hz": null,
+    "buffer_frames": null
+  }
+}

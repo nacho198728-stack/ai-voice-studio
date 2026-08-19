@@ -18,6 +18,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "ai-voice-capability"
+version = "0.0.0"
+dependencies = [
+ "ai-voice-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ai-voice-config"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ai-voice-contracts"
 version = "0.0.0"
 
@@ -25,6 +42,8 @@ version = "0.0.0"
 name = "ai-voice-runtime-host"
 version = "0.0.0"
 dependencies = [
+ "ai-voice-capability",
+ "ai-voice-config",
  "ai-voice-contracts",
  "serde",
  "serde_json",

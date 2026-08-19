@@ -1,3 +1,4 @@
+use ai_voice_capability::NativeRuntimeCapabilities;
 use ai_voice_contracts::{IPC_PROTOCOL_CURRENT_VERSION, RUNTIME_VERSION};
 use serde::{Deserialize, Serialize};
 
@@ -14,34 +15,6 @@ pub struct Hello {
     pub protocol_version: u32,
     pub generation: u64,
     pub health: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Platform {
-    Macos,
-    Windows,
-    Linux,
-    Unknown,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Architecture {
-    Arm64,
-    X86_64,
-    Unknown,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeCapabilities {
-    pub platform: Platform,
-    pub architecture: Architecture,
-    pub runtime_version: String,
-    pub protocol_version: u32,
-    pub backend: String,
-    pub engine: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -78,16 +51,15 @@ pub(crate) fn parse_hello(payload: &[u8]) -> Result<Hello, PayloadError> {
     Ok(hello)
 }
 
-pub(crate) fn parse_capabilities(payload: &[u8]) -> Result<RuntimeCapabilities, PayloadError> {
-    let capabilities: RuntimeCapabilities = parse_exact_json(payload)?;
-    if capabilities.runtime_version != RUNTIME_VERSION
-        || capabilities.protocol_version != IPC_PROTOCOL_CURRENT_VERSION
-        || capabilities.backend != "mock"
-        || capabilities.engine != "aivs-mock-v1"
-    {
-        return Err(PayloadError::ContractMismatch);
-    }
-    Ok(capabilities)
+pub(crate) fn parse_capabilities(
+    payload: &[u8],
+) -> Result<NativeRuntimeCapabilities, PayloadError> {
+    NativeRuntimeCapabilities::from_canonical_json(payload).map_err(|error| match error {
+        ai_voice_capability::NativeCapabilityError::Malformed => PayloadError::Malformed,
+        ai_voice_capability::NativeCapabilityError::ContractMismatch => {
+            PayloadError::ContractMismatch
+        }
+    })
 }
 
 fn parse_exact_json<T>(payload: &[u8]) -> Result<T, PayloadError>
@@ -154,6 +126,7 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ai_voice_capability::{Architecture, NativeEngine, Platform, RuntimeBackend};
 
     #[test]
     fn hello_parser_accepts_only_the_canonical_healthy_startup_contract() {
@@ -181,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_parser_validates_the_fixed_mock_identity() {
+    fn capabilities_parser_validates_the_native_backend_engine_pairs() {
         let capabilities = parse_capabilities(
             br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#,
         )
@@ -189,12 +162,18 @@ mod tests {
 
         assert_eq!(capabilities.platform, Platform::Macos);
         assert_eq!(capabilities.architecture, Architecture::Arm64);
-        assert_eq!(capabilities.backend, "mock");
-        assert_eq!(capabilities.engine, "aivs-mock-v1");
+        assert_eq!(capabilities.backend, RuntimeBackend::Mock);
+        assert_eq!(capabilities.engine, NativeEngine::AivsMockV1);
+
+        let unavailable = parse_capabilities(
+            br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"unavailable","engine":"unavailable"}"#,
+        )
+        .expect("canonical unavailable capabilities must parse");
+        assert_eq!(unavailable.backend, RuntimeBackend::Unavailable);
+        assert_eq!(unavailable.engine, NativeEngine::Unavailable);
 
         for malformed in [
             br#"{"platform":"ios","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#.as_slice(),
-            br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"unavailable","engine":"unavailable"}"#,
             br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"other"}"#,
             br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}x"#,
         ] {

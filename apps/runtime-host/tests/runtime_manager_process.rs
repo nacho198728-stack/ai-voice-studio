@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
+use ai_voice_capability::{NativeEngine, RuntimeBackend};
 use ai_voice_runtime_host::{RuntimeManager, RuntimeManagerConfig, RuntimeState};
 
 fn integration_paths() -> (PathBuf, PathBuf) {
@@ -37,8 +38,8 @@ async fn real_child_start_concurrent_commands_pipeline_and_clean_stop() {
     let (ping, capabilities) = tokio::join!(manager.ping(&ping_bytes), manager.get_capabilities());
     assert_eq!(ping.expect("Ping succeeds"), ping_bytes);
     let capabilities = capabilities.expect("capability query succeeds");
-    assert_eq!(capabilities.backend, "mock");
-    assert_eq!(capabilities.engine, "aivs-mock-v1");
+    assert_eq!(capabilities.backend, RuntimeBackend::Mock);
+    assert_eq!(capabilities.engine, NativeEngine::AivsMockV1);
 
     let summary = manager
         .run_mock_pipeline()

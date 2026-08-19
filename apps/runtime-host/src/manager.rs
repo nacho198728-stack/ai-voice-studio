@@ -6,6 +6,13 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai_voice_capability::{
+    CapabilityProfile, ManagerCapability, ManagerHealth, NativeRuntimeCapabilities, RuntimeBackend,
+};
+use ai_voice_config::{
+    BackendKind, MAX_MOCK_WORK_ITERATIONS, MAX_RUNTIME_IN_FLIGHT, MAX_RUNTIME_QUEUE_CAPACITY,
+    MAX_RUNTIME_TIMEOUT_MS, MAX_STDERR_TAIL_BYTES, ProductConfig,
+};
 use ai_voice_contracts::runtime_message::{
     Command, Decoder, MAX_PING_PAYLOAD_BYTES, MessageKind, RuntimeMessage, encode,
 };
@@ -17,16 +24,12 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior, timeout};
 
 use crate::payload::{
-    Hello, MockPipelineSummary, PayloadError, RuntimeCapabilities, parse_capabilities, parse_hello,
+    Hello, MockPipelineSummary, PayloadError, parse_capabilities, parse_hello,
     parse_mock_pipeline_summary,
 };
 
 const MAX_PATH_UNITS: usize = 4_096;
-const MAX_TIMEOUT: Duration = Duration::from_secs(300);
-const MAX_IN_FLIGHT: usize = 64;
-const MAX_QUEUE_CAPACITY: usize = 256;
-const MAX_STDERR_TAIL_BYTES: usize = 65_536;
-const MAX_MOCK_WORK_ITERATIONS: u32 = 1_000_000;
+const MAX_TIMEOUT: Duration = Duration::from_millis(MAX_RUNTIME_TIMEOUT_MS as u64);
 const STDOUT_READ_BYTES: usize = 2_048;
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
@@ -229,6 +232,38 @@ impl RuntimeManagerConfig {
         }
     }
 
+    pub fn from_product_config(
+        product: &ProductConfig,
+        runtime_path: PathBuf,
+        plugin_path: PathBuf,
+    ) -> Result<Self, ManagerError> {
+        product.validate().map_err(|error| {
+            ManagerError::invalid_configuration(format!(
+                "product configuration is invalid: {error}"
+            ))
+        })?;
+        let mock_work_iterations = match product.backend.kind {
+            BackendKind::Mock => product.backend.mock.work_iterations,
+        };
+        let config = Self {
+            runtime_path,
+            plugin_path,
+            mock_work_iterations,
+            handshake_timeout: Duration::from_millis(u64::from(
+                product.runtime.handshake_timeout_ms,
+            )),
+            request_timeout: Duration::from_millis(u64::from(product.runtime.request_timeout_ms)),
+            shutdown_timeout: Duration::from_millis(u64::from(product.runtime.shutdown_timeout_ms)),
+            max_in_flight: product.runtime.max_in_flight as usize,
+            command_queue_capacity: product.runtime.command_queue_capacity as usize,
+            event_queue_capacity: product.runtime.event_queue_capacity as usize,
+            stderr_tail_bytes: product.runtime.stderr_tail_bytes as usize,
+            restart_max_attempts: product.runtime.restart_max_attempts,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
     pub fn with_handshake_timeout(mut self, value: Duration) -> Self {
         self.handshake_timeout = value;
         self
@@ -263,18 +298,22 @@ impl RuntimeManagerConfig {
                 )));
             }
         }
-        validate_nonzero_limit("max in-flight requests", self.max_in_flight, MAX_IN_FLIGHT)?;
+        validate_nonzero_limit(
+            "max in-flight requests",
+            self.max_in_flight,
+            MAX_RUNTIME_IN_FLIGHT as usize,
+        )?;
         validate_nonzero_limit(
             "command queue capacity",
             self.command_queue_capacity,
-            MAX_QUEUE_CAPACITY,
+            MAX_RUNTIME_QUEUE_CAPACITY as usize,
         )?;
         validate_nonzero_limit(
             "event queue capacity",
             self.event_queue_capacity,
-            MAX_QUEUE_CAPACITY,
+            MAX_RUNTIME_QUEUE_CAPACITY as usize,
         )?;
-        if self.stderr_tail_bytes > MAX_STDERR_TAIL_BYTES {
+        if self.stderr_tail_bytes > MAX_STDERR_TAIL_BYTES as usize {
             return Err(ManagerError::invalid_configuration(
                 "stderr retention exceeds the fixed limit",
             ));
@@ -360,6 +399,33 @@ pub struct RuntimeStatus {
     pub restart_policy: RestartPolicyStatus,
 }
 
+impl RuntimeStatus {
+    pub fn capability_profile(
+        &self,
+        product: &ProductConfig,
+        native: Option<&NativeRuntimeCapabilities>,
+    ) -> CapabilityProfile {
+        let configured_backend = match product.backend.kind {
+            BackendKind::Mock => RuntimeBackend::Mock,
+        };
+        CapabilityProfile::from_observation(
+            configured_backend,
+            ManagerCapability {
+                health: match self.state {
+                    RuntimeState::Stopped => ManagerHealth::Stopped,
+                    RuntimeState::Starting => ManagerHealth::Starting,
+                    RuntimeState::Connected => ManagerHealth::Connected,
+                    RuntimeState::Stopping => ManagerHealth::Stopping,
+                    RuntimeState::Crashed => ManagerHealth::Crashed,
+                    RuntimeState::Error => ManagerHealth::Error,
+                },
+                generation: self.generation,
+            },
+            native,
+        )
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeManager {
     commands: mpsc::Sender<ActorCommand>,
@@ -406,7 +472,7 @@ impl RuntimeManager {
         self.request(Command::Ping, payload.to_vec()).await
     }
 
-    pub async fn get_capabilities(&self) -> Result<RuntimeCapabilities, ManagerError> {
+    pub async fn get_capabilities(&self) -> Result<NativeRuntimeCapabilities, ManagerError> {
         let payload = self.request(Command::GetCapabilities, Vec::new()).await?;
         parse_capabilities(&payload)
             .map_err(|error| ManagerError::payload(error, Command::GetCapabilities))

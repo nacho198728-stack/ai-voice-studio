@@ -1,5 +1,10 @@
 [workspace]
-members = ["apps/runtime-host", "core/contracts"]
+members = [
+  "apps/runtime-host",
+  "core/capability",
+  "core/config",
+  "core/contracts",
+]
 resolver = "3"
 
 [workspace.package]
