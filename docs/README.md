@@ -7,6 +7,7 @@ workflows, stable contracts, and accepted Architecture Decision Records.
 
 - [Phase 0.5 architecture](architecture/ARCHITECTURE.md)
 - [Development environment](development/DEVELOPMENT.md)
+- [Phase 0.5 acceptance evidence draft](development/PHASE-0.5-ACCEPTANCE.md)
 - [Configuration and capability policy](development/CONFIGURATION.md)
 - [RuntimeMessage stdio v1](contracts/voice-runtime-stdio-v1.md)
 - [VoiceEngine C ABI v1](contracts/voice-engine-c-abi-v1.md)
