@@ -52,7 +52,7 @@
 
 - [x] 建立最小配置与能力模型。创建版本化 `config/config.json`，包含 runtime、audio 占位设置、backend=mock 和 debug；定义 Hardware/Runtime/Engine capability 的最小结构，但 Phase 0.5 只返回平台、架构、Runtime version、Mock backend 和 Mock Engine 能力，不进行硬件 Benchmark。受影响路径包括 `core/capability`、`core/model-package`、`core/telemetry` 和配置加载模块。
 
-- [ ] 创建 Desktop Shell 并打通 Mock 控制链路。`apps/desktop` 只显示产品名、开发版本、Runtime 状态和控制操作；Tauri 经 RuntimeManager/IPC 触发 C++ 内部 Mock PCM，UI 只接收帧数、校验值、耗时和 metrics，不接触 PCM 或业务功能。
+- [x] 创建 Desktop Shell 并打通 Mock 控制链路。`apps/desktop` 只显示产品名、开发版本、Runtime 状态和控制操作；Tauri 经 RuntimeManager/IPC 触发 C++ 内部 Mock PCM，UI 只接收帧数、校验值、耗时和 metrics，不接触 PCM 或业务功能。
 
 - [ ] 在 `tests/contract` 建立 C ABI contract test。分别用 C 和 C++ 编译头文件，验证 ABI version、struct size、函数表和插件入口。
 
