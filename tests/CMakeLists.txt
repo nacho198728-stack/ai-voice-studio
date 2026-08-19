@@ -171,6 +171,25 @@ add_test(
   COMMAND aivs_mock_pipeline_test $<TARGET_FILE:aivs_mock_voice_engine>
 )
 
+add_executable(
+  aivs_mock_pipeline_benchmark_gate
+  benchmark/mock_pipeline_benchmark_test.cpp
+)
+target_link_libraries(
+  aivs_mock_pipeline_benchmark_gate
+  PRIVATE ai_voice::mock_pipeline
+)
+add_test(
+  NAME aivs_mock_pipeline_benchmark_gate
+  COMMAND
+    aivs_mock_pipeline_benchmark_gate
+    $<TARGET_FILE:aivs_mock_voice_engine>
+)
+set_tests_properties(
+  aivs_mock_pipeline_benchmark_gate
+  PROPERTIES LABELS benchmark TIMEOUT 20
+)
+
 add_test(
   NAME aivs_mock_process_audio_no_logging
   COMMAND
