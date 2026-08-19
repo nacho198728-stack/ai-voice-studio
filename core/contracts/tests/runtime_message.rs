@@ -177,7 +177,7 @@ fn assert_terminal_until_reset(input: &[u8], expected: FrameError) {
     assert_eq!(decoder.feed(input).unwrap_err(), expected);
     assert!(decoder.is_failed());
     assert_eq!(decoder.buffered_len(), 0);
-    assert_eq!(decoder.buffered_capacity(), 0);
+    assert_eq!(decoder.allocated_storage_bytes(), 0);
     assert_eq!(decoder.feed(&fixture()).unwrap_err(), expected);
     assert_eq!(decoder.finish().unwrap_err(), expected);
 
@@ -459,6 +459,8 @@ fn accepts_byte_chunks_and_multiple_sticky_frames() {
     let mut combined = first;
     combined.extend(second);
     assert_eq!(sticky.feed(&combined).unwrap().len(), 2);
+    assert_eq!(sticky.allocated_storage_bytes(), MAX_FRAME_BYTES);
+    assert_eq!(sticky.storage_allocation_count(), 1);
     assert_eq!(sticky.finish(), Ok(()));
 }
 
@@ -482,31 +484,100 @@ fn decodes_minimum_and_maximum_frames_at_every_split_point() {
     ];
 
     for (frame, expected) in cases {
+        let expected_storage = if expected.payload.is_empty() {
+            0
+        } else {
+            MAX_FRAME_BYTES
+        };
         for split in 0..=frame.len() {
             let mut decoder = Decoder::new();
             let mut decoded = decoder.feed(&frame[..split]).unwrap();
             decoded.extend(decoder.feed(&frame[split..]).unwrap());
             assert_eq!(decoded, vec![expected.clone()], "split={split}");
             assert_eq!(decoder.finish(), Ok(()));
-            assert!(decoder.buffered_capacity() <= MAX_FRAME_BYTES);
+            assert_eq!(decoder.allocated_storage_bytes(), expected_storage);
         }
     }
 }
 
 #[test]
-fn bounds_retained_capacity_under_bytewise_maximum_frame_input() {
+fn fixed_storage_is_lazy_reused_and_released_without_capacity_assumptions() {
     let maximum = request(Command::RunMockPipeline, vec![0; MAX_CONTROL_PAYLOAD_BYTES]);
     let frame = encode(&maximum).unwrap();
     let mut decoder = Decoder::new();
     let mut decoded = Vec::new();
 
-    for byte in &frame {
+    assert_eq!(decoder.allocated_storage_bytes(), 0);
+    assert_eq!(decoder.storage_allocation_count(), 0);
+    assert!(decoder.feed(&frame[..HEADER_SIZE - 1]).unwrap().is_empty());
+    assert_eq!(decoder.allocated_storage_bytes(), 0);
+    assert_eq!(decoder.storage_allocation_count(), 0);
+
+    assert!(
+        decoder
+            .feed(&frame[HEADER_SIZE - 1..HEADER_SIZE])
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(decoder.allocated_storage_bytes(), MAX_FRAME_BYTES);
+    assert_eq!(decoder.storage_allocation_count(), 1);
+
+    for byte in &frame[HEADER_SIZE..] {
         decoded.extend(decoder.feed(std::slice::from_ref(byte)).unwrap());
-        assert!(decoder.buffered_capacity() <= MAX_FRAME_BYTES);
+        assert_eq!(decoder.allocated_storage_bytes(), MAX_FRAME_BYTES);
+        assert_eq!(decoder.storage_allocation_count(), 1);
     }
 
-    assert_eq!(decoded, vec![maximum]);
-    assert!(decoder.buffered_capacity() <= MAX_FRAME_BYTES);
+    assert_eq!(decoded, vec![maximum.clone()]);
+    assert_eq!(decoder.feed(&frame).unwrap(), vec![maximum.clone()]);
+    assert_eq!(decoder.allocated_storage_bytes(), MAX_FRAME_BYTES);
+    assert_eq!(decoder.storage_allocation_count(), 1);
+
+    decoder.reset();
+    assert_eq!(decoder.allocated_storage_bytes(), 0);
+    assert_eq!(decoder.storage_allocation_count(), 1);
+
+    assert_eq!(decoder.feed(&frame).unwrap(), vec![maximum]);
+    assert_eq!(decoder.allocated_storage_bytes(), MAX_FRAME_BYTES);
+    assert_eq!(decoder.storage_allocation_count(), 2);
+
+    let mut bad_magic = fixture();
+    bad_magic[0] = 0;
+    assert_eq!(
+        decoder.feed(&bad_magic).unwrap_err().kind,
+        FrameErrorKind::Magic
+    );
+    assert_eq!(decoder.allocated_storage_bytes(), 0);
+    assert_eq!(decoder.storage_allocation_count(), 2);
+}
+
+#[test]
+fn invalid_or_bodyless_headers_never_allocate_fixed_storage() {
+    let mut bad_magic = fixture();
+    bad_magic[0] = 0;
+    let mut invalid = Decoder::new();
+    assert_eq!(
+        invalid.feed(&bad_magic).unwrap_err().kind,
+        FrameErrorKind::Magic
+    );
+    assert_eq!(invalid.allocated_storage_bytes(), 0);
+    assert_eq!(invalid.storage_allocation_count(), 0);
+
+    let mut oversized = fixture()[..HEADER_SIZE].to_vec();
+    oversized[28..32].copy_from_slice(&((MAX_CONTROL_PAYLOAD_BYTES + 1) as u32).to_le_bytes());
+    let mut oversized_decoder = Decoder::new();
+    assert_eq!(
+        oversized_decoder.feed(&oversized).unwrap_err().kind,
+        FrameErrorKind::PayloadTooLarge
+    );
+    assert_eq!(oversized_decoder.allocated_storage_bytes(), 0);
+    assert_eq!(oversized_decoder.storage_allocation_count(), 0);
+
+    let hello = fixture_named("runtime-message-v1-hello.hex");
+    let mut bodyless = Decoder::new();
+    assert_eq!(bodyless.feed(&hello).unwrap().len(), 1);
+    assert_eq!(bodyless.allocated_storage_bytes(), 0);
+    assert_eq!(bodyless.storage_allocation_count(), 0);
 }
 
 #[test]
@@ -521,13 +592,13 @@ fn bounds_input_and_output_resources_per_feed() {
     let error = decoder.feed(&too_many).unwrap_err();
     assert_eq!(error.code, ErrorCode::FrameTooLarge);
     assert_eq!(error.kind, FrameErrorKind::BatchTooLarge);
-    assert_eq!(decoder.buffered_capacity(), 0);
+    assert_eq!(decoder.allocated_storage_bytes(), 0);
 
     let mut decoder = Decoder::new();
     let oversized_input = vec![0; MAX_INPUT_BYTES_PER_FEED + 1];
     let error = decoder.feed(&oversized_input).unwrap_err();
     assert_eq!(error.kind, FrameErrorKind::BatchTooLarge);
-    assert_eq!(decoder.buffered_capacity(), 0);
+    assert_eq!(decoder.allocated_storage_bytes(), 0);
 
     let mut valid_then_fatal = hello.repeat(8);
     let mut malformed = hello;
@@ -538,7 +609,7 @@ fn bounds_input_and_output_resources_per_feed() {
         decoder.feed(&valid_then_fatal).unwrap_err().kind,
         FrameErrorKind::Magic
     );
-    assert_eq!(decoder.buffered_capacity(), 0);
+    assert_eq!(decoder.allocated_storage_bytes(), 0);
 }
 
 #[test]
@@ -646,6 +717,8 @@ fn rejects_oversize_before_body_retention_and_requires_reset() {
     assert_eq!(error.code, ErrorCode::FrameTooLarge);
     assert_eq!(error.kind, FrameErrorKind::PayloadTooLarge);
     assert_eq!(decoder.buffered_len(), 0);
+    assert_eq!(decoder.allocated_storage_bytes(), 0);
+    assert_eq!(decoder.storage_allocation_count(), 0);
     assert!(decoder.is_failed());
     let repeated = decoder.feed(&fixture()).unwrap_err();
     assert_eq!(repeated.code, ErrorCode::FrameTooLarge);
@@ -699,7 +772,7 @@ fn every_fatal_class_is_sticky_until_reset_and_discards_batch_prefixes() {
         let mut decoder = Decoder::new();
         assert_eq!(decoder.feed(&valid_then_invalid).unwrap_err(), expected);
         assert!(decoder.is_failed());
-        assert_eq!(decoder.buffered_capacity(), 0);
+        assert_eq!(decoder.allocated_storage_bytes(), 0);
     }
 
     assert_terminal_until_reset(

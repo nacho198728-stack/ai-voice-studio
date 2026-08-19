@@ -86,17 +86,25 @@ struct ParsedHeader {
 
 #[derive(Default)]
 pub struct Decoder {
-    buffer: Vec<u8>,
+    header_bytes: [u8; HEADER_SIZE],
+    header_len: usize,
+    frame_storage: Option<Box<[u8; MAX_FRAME_BYTES]>>,
+    body_len: usize,
     header: Option<ParsedHeader>,
     failure: Option<FrameError>,
+    storage_allocation_count: usize,
 }
 
 impl Decoder {
     pub const fn new() -> Self {
         Self {
-            buffer: Vec::new(),
+            header_bytes: [0; HEADER_SIZE],
+            header_len: 0,
+            frame_storage: None,
+            body_len: 0,
             header: None,
             failure: None,
+            storage_allocation_count: 0,
         }
     }
 
@@ -111,16 +119,27 @@ impl Decoder {
         let mut messages = Vec::new();
         while !input.is_empty() {
             if self.header.is_none() {
-                let needed = HEADER_SIZE - self.buffer.len();
+                let needed = HEADER_SIZE - self.header_len;
                 let take = needed.min(input.len());
-                self.buffer.extend_from_slice(&input[..take]);
+                self.header_bytes[self.header_len..self.header_len + take]
+                    .copy_from_slice(&input[..take]);
+                self.header_len += take;
                 input = &input[take..];
-                if self.buffer.len() < HEADER_SIZE {
+                if self.header_len < HEADER_SIZE {
                     break;
                 }
-                match parse_header(&self.buffer) {
+                match parse_header(&self.header_bytes) {
                     Ok(header) => {
-                        self.buffer.reserve_exact(header.payload_length);
+                        if header.payload_length != 0 {
+                            if self.frame_storage.is_none() {
+                                self.frame_storage = Some(new_frame_storage());
+                                self.storage_allocation_count += 1;
+                            }
+                            self.frame_storage
+                                .as_mut()
+                                .expect("non-empty frame has fixed storage")[..HEADER_SIZE]
+                                .copy_from_slice(&self.header_bytes);
+                        }
                         self.header = Some(header);
                     }
                     Err(error) => return Err(self.fail(error)),
@@ -128,12 +147,18 @@ impl Decoder {
             }
 
             let header = self.header.expect("validated header is present");
-            let frame_size = HEADER_SIZE + header.payload_length;
-            let needed = frame_size - self.buffer.len();
+            let needed = header.payload_length - self.body_len;
             let take = needed.min(input.len());
-            self.buffer.extend_from_slice(&input[..take]);
+            if take != 0 {
+                let body_start = HEADER_SIZE + self.body_len;
+                self.frame_storage
+                    .as_mut()
+                    .expect("non-empty frame has fixed storage")[body_start..body_start + take]
+                    .copy_from_slice(&input[..take]);
+                self.body_len += take;
+            }
             input = &input[take..];
-            if self.buffer.len() < frame_size {
+            if self.body_len < header.payload_length {
                 break;
             }
 
@@ -146,9 +171,18 @@ impl Decoder {
                 request_id: header.request_id,
                 command: header.command,
                 error_code: header.error_code,
-                payload: self.buffer[HEADER_SIZE..frame_size].to_vec(),
+                payload: if header.payload_length == 0 {
+                    Vec::new()
+                } else {
+                    self.frame_storage
+                        .as_ref()
+                        .expect("non-empty frame has fixed storage")
+                        [HEADER_SIZE..HEADER_SIZE + header.payload_length]
+                        .to_vec()
+                },
             });
-            self.buffer.clear();
+            self.header_len = 0;
+            self.body_len = 0;
             self.header = None;
         }
         Ok(messages)
@@ -158,24 +192,32 @@ impl Decoder {
         if let Some(error) = self.failure {
             return Err(error);
         }
-        if self.buffer.is_empty() {
+        if self.buffered_len() == 0 {
             return Ok(());
         }
         Err(self.fail(FrameError::malformed(FrameErrorKind::Truncated)))
     }
 
     pub fn reset(&mut self) {
-        self.buffer.clear();
+        self.header_len = 0;
+        self.frame_storage = None;
+        self.body_len = 0;
         self.header = None;
         self.failure = None;
     }
 
     pub fn buffered_len(&self) -> usize {
-        self.buffer.len()
+        self.header_len + self.body_len
     }
 
-    pub fn buffered_capacity(&self) -> usize {
-        self.buffer.capacity()
+    pub fn allocated_storage_bytes(&self) -> usize {
+        self.frame_storage
+            .as_ref()
+            .map_or(0, |storage| storage.len())
+    }
+
+    pub fn storage_allocation_count(&self) -> usize {
+        self.storage_allocation_count
     }
 
     pub fn is_failed(&self) -> bool {
@@ -183,10 +225,20 @@ impl Decoder {
     }
 
     fn fail(&mut self, error: FrameError) -> FrameError {
-        self.buffer = Vec::new();
+        self.header_len = 0;
+        self.frame_storage = None;
+        self.body_len = 0;
         self.header = None;
         self.failure = Some(error);
         error
+    }
+}
+
+fn new_frame_storage() -> Box<[u8; MAX_FRAME_BYTES]> {
+    let storage = vec![0; MAX_FRAME_BYTES].into_boxed_slice();
+    match storage.try_into() {
+        Ok(storage) => storage,
+        Err(_) => unreachable!("fixed frame storage has the generated maximum length"),
     }
 }
 

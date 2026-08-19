@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <new>
 #include <optional>
 #include <span>
@@ -280,31 +281,43 @@ class Decoder {
     try {
       while (!input.empty()) {
         if (!header_.has_value()) {
-          const auto needed = kHeaderSize - buffer_.size();
+          const auto needed = kHeaderSize - header_size_;
           const auto take = std::min(needed, input.size());
-          buffer_.insert(
-              buffer_.end(), input.begin(), input.begin() + static_cast<std::ptrdiff_t>(take));
+          std::copy_n(input.begin(), take, header_buffer_.begin() +
+                                               static_cast<std::ptrdiff_t>(header_size_));
+          header_size_ += take;
           input = input.subspan(take);
-          if (buffer_.size() < kHeaderSize) {
+          if (header_size_ < kHeaderSize) {
             break;
           }
-          const auto parsed = detail::parse_header(buffer_);
+          const auto parsed = detail::parse_header(header_buffer_);
           if (parsed.error.has_value()) {
             std::vector<RuntimeMessage>().swap(result.messages);
             result.error = fail(*parsed.error);
             return result;
           }
-          buffer_.reserve(kHeaderSize + parsed.header->payload_length);
+          if (parsed.header->payload_length != 0U) {
+            if (!frame_storage_) {
+              frame_storage_ =
+                  std::make_unique<std::array<std::uint8_t, kMaxFrameBytes>>();
+              ++storage_allocation_count_;
+            }
+            std::copy(header_buffer_.begin(), header_buffer_.end(), frame_storage_->begin());
+          }
           header_ = parsed.header;
         }
 
-        const auto frame_size = kHeaderSize + header_->payload_length;
-        const auto needed = frame_size - buffer_.size();
+        const auto needed = header_->payload_length - body_size_;
         const auto take = std::min(needed, input.size());
-        buffer_.insert(
-            buffer_.end(), input.begin(), input.begin() + static_cast<std::ptrdiff_t>(take));
+        if (take != 0U) {
+          std::copy_n(
+              input.begin(),
+              take,
+              frame_storage_->begin() + static_cast<std::ptrdiff_t>(kHeaderSize + body_size_));
+          body_size_ += take;
+        }
         input = input.subspan(take);
-        if (buffer_.size() < frame_size) {
+        if (body_size_ < header_->payload_length) {
           break;
         }
 
@@ -319,10 +332,15 @@ class Decoder {
             header_->request_id,
             header_->command,
             header_->error_code,
-            std::vector<std::uint8_t>(
-                buffer_.begin() + static_cast<std::ptrdiff_t>(kHeaderSize), buffer_.end()),
+            header_->payload_length == 0U
+                ? std::vector<std::uint8_t>{}
+                : std::vector<std::uint8_t>(
+                      frame_storage_->begin() + static_cast<std::ptrdiff_t>(kHeaderSize),
+                      frame_storage_->begin() +
+                          static_cast<std::ptrdiff_t>(kHeaderSize + header_->payload_length)),
         });
-        buffer_.clear();
+        header_size_ = 0U;
+        body_size_ = 0U;
         header_.reset();
       }
       return result;
@@ -337,33 +355,46 @@ class Decoder {
     if (failure_.has_value()) {
       return failure_;
     }
-    if (buffer_.empty()) {
+    if (buffered_size() == 0U) {
       return std::nullopt;
     }
     return fail(detail::malformed(FrameErrorKind::Truncated));
   }
 
   void reset() {
-    buffer_.clear();
+    header_size_ = 0U;
+    frame_storage_.reset();
+    body_size_ = 0U;
     header_.reset();
     failure_.reset();
   }
 
-  [[nodiscard]] std::size_t buffered_size() const { return buffer_.size(); }
-  [[nodiscard]] std::size_t buffered_capacity() const { return buffer_.capacity(); }
+  [[nodiscard]] std::size_t buffered_size() const { return header_size_ + body_size_; }
+  [[nodiscard]] std::size_t allocated_storage_bytes() const {
+    return frame_storage_ ? kMaxFrameBytes : 0U;
+  }
+  [[nodiscard]] std::size_t storage_allocation_count() const {
+    return storage_allocation_count_;
+  }
   [[nodiscard]] bool failed() const { return failure_.has_value(); }
 
  private:
   FrameError fail(FrameError error) {
-    std::vector<std::uint8_t>().swap(buffer_);
+    header_size_ = 0U;
+    frame_storage_.reset();
+    body_size_ = 0U;
     header_.reset();
     failure_ = error;
     return error;
   }
 
-  std::vector<std::uint8_t> buffer_;
+  std::array<std::uint8_t, kHeaderSize> header_buffer_{};
+  std::size_t header_size_{0U};
+  std::unique_ptr<std::array<std::uint8_t, kMaxFrameBytes>> frame_storage_;
+  std::size_t body_size_{0U};
   std::optional<detail::ParsedHeader> header_;
   std::optional<FrameError> failure_;
+  std::size_t storage_allocation_count_{0U};
 };
 
 }  // namespace ai_voice::contracts::runtime_message

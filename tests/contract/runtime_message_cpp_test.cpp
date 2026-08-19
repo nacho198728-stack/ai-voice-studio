@@ -200,19 +200,53 @@ void chunking_sticky_and_eof() {
   assert(!maximum.error.has_value());
   message::Decoder maximum_bytewise;
   std::vector<message::RuntimeMessage> maximum_messages;
-  for (const auto byte : maximum.bytes) {
+  assert(maximum_bytewise.allocated_storage_bytes() == 0U);
+  assert(maximum_bytewise.storage_allocation_count() == 0U);
+  assert(maximum_bytewise.feed(std::span<const std::uint8_t>(
+             maximum.bytes.data(), message::kHeaderSize - 1U)).messages.empty());
+  assert(maximum_bytewise.allocated_storage_bytes() == 0U);
+  assert(maximum_bytewise.storage_allocation_count() == 0U);
+  assert(maximum_bytewise.feed(std::span<const std::uint8_t>(
+             maximum.bytes.data() + message::kHeaderSize - 1U, 1U)).messages.empty());
+  assert(maximum_bytewise.allocated_storage_bytes() == message::kMaxFrameBytes);
+  assert(maximum_bytewise.storage_allocation_count() == 1U);
+  for (const auto byte : std::span<const std::uint8_t>(maximum.bytes).subspan(message::kHeaderSize)) {
     const auto result = maximum_bytewise.feed(std::span<const std::uint8_t>(&byte, 1U));
     assert(!result.error.has_value());
     maximum_messages.insert(
         maximum_messages.end(), result.messages.begin(), result.messages.end());
-    assert(maximum_bytewise.buffered_capacity() <= message::kMaxFrameBytes);
+    assert(maximum_bytewise.allocated_storage_bytes() == message::kMaxFrameBytes);
+    assert(maximum_bytewise.storage_allocation_count() == 1U);
   }
   assert(maximum_messages.size() == 1U);
+  assert(maximum_bytewise.feed(maximum.bytes).messages.size() == 1U);
+  assert(maximum_bytewise.allocated_storage_bytes() == message::kMaxFrameBytes);
+  assert(maximum_bytewise.storage_allocation_count() == 1U);
+
+  maximum_bytewise.reset();
+  assert(maximum_bytewise.allocated_storage_bytes() == 0U);
+  assert(maximum_bytewise.storage_allocation_count() == 1U);
+  assert(maximum_bytewise.feed(maximum.bytes).messages.size() == 1U);
+  assert(maximum_bytewise.allocated_storage_bytes() == message::kMaxFrameBytes);
+  assert(maximum_bytewise.storage_allocation_count() == 2U);
+
+  auto bad_magic = bytes;
+  bad_magic[0] = 0U;
+  assert(maximum_bytewise.feed(bad_magic).error->kind == message::FrameErrorKind::Magic);
+  assert(maximum_bytewise.allocated_storage_bytes() == 0U);
+  assert(maximum_bytewise.storage_allocation_count() == 2U);
+
+  message::Decoder bodyless;
+  assert(bodyless.feed(fixture_named("runtime-message-v1-hello.hex")).messages.size() == 1U);
+  assert(bodyless.allocated_storage_bytes() == 0U);
+  assert(bodyless.storage_allocation_count() == 0U);
 
   message::Decoder sticky;
   auto combined = bytes;
   combined.insert(combined.end(), bytes.begin(), bytes.end());
   assert(sticky.feed(combined).messages.size() == 2U);
+  assert(sticky.allocated_storage_bytes() == message::kMaxFrameBytes);
+  assert(sticky.storage_allocation_count() == 1U);
 
   for (const auto end : std::vector<std::size_t>{
            1U, message::kHeaderSize - 1U, message::kHeaderSize, bytes.size() - 1U}) {
@@ -239,15 +273,15 @@ void bounded_feed_resources() {
   const auto too_many = too_many_decoder.feed(many);
   assert(too_many.error->code == ErrorCode::FrameTooLarge);
   assert(too_many.error->kind == message::FrameErrorKind::BatchTooLarge);
-  assert(too_many.messages.capacity() == 0U);
-  assert(too_many_decoder.buffered_capacity() == 0U);
+  assert(too_many.messages.empty());
+  assert(too_many_decoder.allocated_storage_bytes() == 0U);
 
   message::Decoder oversized_decoder;
   const auto oversized = oversized_decoder.feed(
       std::vector<std::uint8_t>(message::kMaxInputBytesPerFeed + 1U));
   assert(oversized.error->kind == message::FrameErrorKind::BatchTooLarge);
-  assert(oversized.messages.capacity() == 0U);
-  assert(oversized_decoder.buffered_capacity() == 0U);
+  assert(oversized.messages.empty());
+  assert(oversized_decoder.allocated_storage_bytes() == 0U);
 
   std::vector<std::uint8_t> valid_then_fatal;
   for (std::size_t index = 0; index < 8U; ++index) {
@@ -259,8 +293,8 @@ void bounded_feed_resources() {
   message::Decoder fatal_decoder;
   const auto fatal = fatal_decoder.feed(valid_then_fatal);
   assert(fatal.error->kind == message::FrameErrorKind::Magic);
-  assert(fatal.messages.capacity() == 0U);
-  assert(fatal_decoder.buffered_capacity() == 0U);
+  assert(fatal.messages.empty());
+  assert(fatal_decoder.allocated_storage_bytes() == 0U);
 }
 
 void allocation_failures_are_terminal_and_release_resources() {
@@ -277,26 +311,28 @@ void allocation_failures_are_terminal_and_release_resources() {
     allocation_fault::disable();
     assert(result.error->code == ErrorCode::InternalError);
     assert(result.error->kind == message::FrameErrorKind::AllocationFailure);
-    assert(result.messages.capacity() == 0U);
-    assert(decoder.buffered_capacity() == 0U);
+    assert(result.messages.empty());
+    assert(decoder.allocated_storage_bytes() == 0U);
     assert(decoder.failed());
     assert(decoder.feed({}).error == result.error);
   };
 
-  message::Decoder header_growth;
-  exercise(header_growth, std::span<const std::uint8_t>(hello.data(), 1U), 0U);
-
-  message::Decoder body_growth;
-  exercise(body_growth, body_frame, 1U);
+  message::Decoder fixed_storage;
+  exercise(fixed_storage, body_frame, 0U);
 
   message::Decoder payload_materialization;
-  exercise(payload_materialization, body_frame, 2U);
+  exercise(payload_materialization, body_frame, 1U);
 
-  message::Decoder result_growth;
-  exercise(result_growth, hello, 1U);
+  message::Decoder first_result_growth;
+  exercise(first_result_growth, body_frame, 2U);
 
-  result_growth.reset();
-  assert(result_growth.feed(hello).messages.size() == 1U);
+  auto two_hellos = hello;
+  two_hellos.insert(two_hellos.end(), hello.begin(), hello.end());
+  message::Decoder later_result_growth;
+  exercise(later_result_growth, two_hellos, 1U);
+
+  later_result_growth.reset();
+  assert(later_result_growth.feed(hello).messages.size() == 1U);
 }
 
 void malformed_and_failed_state() {
@@ -324,6 +360,8 @@ void malformed_and_failed_state() {
     const auto result = decoder.feed(bytes);
     assert(result.error->code == test_case.code);
     assert(result.error->kind == test_case.kind);
+    assert(decoder.allocated_storage_bytes() == 0U);
+    assert(decoder.storage_allocation_count() == 0U);
   }
 
   auto unknown_error = fixture();
@@ -365,6 +403,8 @@ void malformed_and_failed_state() {
   assert(error->code == ErrorCode::FrameTooLarge);
   assert(error->kind == message::FrameErrorKind::PayloadTooLarge);
   assert(decoder.buffered_size() == 0U);
+  assert(decoder.allocated_storage_bytes() == 0U);
+  assert(decoder.storage_allocation_count() == 0U);
   assert(decoder.failed());
   const auto repeated = decoder.feed(fixture()).error;
   assert(repeated->code == ErrorCode::FrameTooLarge);
