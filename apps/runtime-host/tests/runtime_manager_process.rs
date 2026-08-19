@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
-use ai_voice_capability::{NativeEngine, RuntimeBackend};
+use ai_voice_capability::{
+    CapabilityObservation, CapabilityProfileError, EngineIdentity, RuntimeBackend,
+};
+use ai_voice_config::ProductConfig;
 use ai_voice_runtime_host::{RuntimeManager, RuntimeManagerConfig, RuntimeState};
 
 fn integration_paths() -> (PathBuf, PathBuf) {
@@ -38,8 +41,12 @@ async fn real_child_start_concurrent_commands_pipeline_and_clean_stop() {
     let (ping, capabilities) = tokio::join!(manager.ping(&ping_bytes), manager.get_capabilities());
     assert_eq!(ping.expect("Ping succeeds"), ping_bytes);
     let capabilities = capabilities.expect("capability query succeeds");
-    assert_eq!(capabilities.backend, RuntimeBackend::Mock);
-    assert_eq!(capabilities.engine, NativeEngine::AivsMockV1);
+    assert_eq!(capabilities.generation(), 1);
+    assert_eq!(capabilities.capabilities().backend(), RuntimeBackend::Mock);
+    assert_eq!(
+        capabilities.capabilities().engine_identity(),
+        Some(EngineIdentity::AivsMockV1)
+    );
 
     let summary = manager
         .run_mock_pipeline()
@@ -82,6 +89,8 @@ async fn idle_child_exit_is_published_as_crashed_and_can_be_started_again() {
     let (runtime, plugin) = integration_paths();
     let manager = RuntimeManager::new(RuntimeManagerConfig::new(runtime, plugin)).unwrap();
     let pid = manager.start_runtime().await.unwrap().pid.unwrap();
+    let generation_one = manager.get_capabilities().await.unwrap();
+    assert_eq!(generation_one.generation(), 1);
 
     terminate_process(pid).await;
     let crashed = wait_for_state(&manager, RuntimeState::Crashed).await;
@@ -92,6 +101,19 @@ async fn idle_child_exit_is_published_as_crashed_and_can_be_started_again() {
     assert_eq!(restarted.state, RuntimeState::Connected);
     assert_eq!(restarted.generation, 2);
     assert_eq!(restarted.restart_policy.attempts_observed, 1);
+    let product =
+        ProductConfig::load_from_bytes(include_bytes!("../../../config/config.json")).unwrap();
+    let stale = restarted
+        .capability_profile(&product, &CapabilityObservation::observed(generation_one))
+        .unwrap_err();
+    assert_eq!(
+        stale,
+        CapabilityProfileError::StaleObservation {
+            manager_generation: 2,
+            observation_generation: 1,
+        }
+    );
+    assert_eq!(manager.get_capabilities().await.unwrap().generation(), 2);
     manager.stop_runtime().await.unwrap();
 }
 

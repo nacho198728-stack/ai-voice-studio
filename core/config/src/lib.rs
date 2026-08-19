@@ -48,19 +48,80 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawProductConfig {
+    schema_version: u32,
+    runtime: RawRuntimeConfig,
+    backend: RawBackendConfig,
+    debug: RawDebugConfig,
+    audio: RawAudioConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRuntimeConfig {
+    handshake_timeout_ms: u32,
+    request_timeout_ms: u32,
+    shutdown_timeout_ms: u32,
+    max_in_flight: u32,
+    command_queue_capacity: u32,
+    event_queue_capacity: u32,
+    stderr_tail_bytes: u32,
+    restart_max_attempts: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawBackendConfig {
+    kind: BackendKind,
+    mock: RawMockBackendConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawMockBackendConfig {
+    work_iterations: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDebugConfig {
+    enabled: bool,
+    log_level: LogLevel,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawAudioConfig {
+    enabled: bool,
+    input_device: AudioDeviceSelection,
+    output_device: AudioDeviceSelection,
+    sample_rate_hz: Option<u32>,
+    buffer_frames: Option<u32>,
+}
+
+/// A validated product configuration.
+///
+/// Composite configuration deliberately has no public Serde deserialization
+/// path; callers must use the validating loaders.
+///
+/// ```compile_fail
+/// use ai_voice_config::ProductConfig;
+/// let _: ProductConfig = serde_json::from_str("{}").unwrap();
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductConfig {
-    pub schema_version: u32,
-    pub runtime: RuntimeConfig,
-    pub backend: BackendConfig,
-    pub debug: DebugConfig,
-    pub audio: AudioConfig,
+    schema_version: u32,
+    runtime: RuntimeConfig,
+    backend: BackendConfig,
+    debug: DebugConfig,
+    audio: AudioConfig,
 }
 
 impl ProductConfig {
     pub fn load_from_bytes(bytes: &[u8]) -> Result<Self, ConfigError> {
-        let config: Self = serde_json::from_slice(bytes).map_err(|error| {
+        let raw: RawProductConfig = serde_json::from_slice(bytes).map_err(|error| {
             ConfigError::new(
                 ConfigErrorKind::InvalidDocument,
                 format!(
@@ -70,8 +131,37 @@ impl ProductConfig {
                 ),
             )
         })?;
-        config.validate()?;
-        Ok(config)
+        validate_raw(&raw)?;
+        Ok(Self {
+            schema_version: raw.schema_version,
+            runtime: RuntimeConfig {
+                handshake_timeout_ms: raw.runtime.handshake_timeout_ms,
+                request_timeout_ms: raw.runtime.request_timeout_ms,
+                shutdown_timeout_ms: raw.runtime.shutdown_timeout_ms,
+                max_in_flight: raw.runtime.max_in_flight,
+                command_queue_capacity: raw.runtime.command_queue_capacity,
+                event_queue_capacity: raw.runtime.event_queue_capacity,
+                stderr_tail_bytes: raw.runtime.stderr_tail_bytes,
+                restart_max_attempts: raw.runtime.restart_max_attempts,
+            },
+            backend: BackendConfig {
+                kind: raw.backend.kind,
+                mock: MockBackendConfig {
+                    work_iterations: raw.backend.mock.work_iterations,
+                },
+            },
+            debug: DebugConfig {
+                enabled: raw.debug.enabled,
+                log_level: raw.debug.log_level,
+            },
+            audio: AudioConfig {
+                enabled: raw.audio.enabled,
+                input_device: raw.audio.input_device,
+                output_device: raw.audio.output_device,
+                sample_rate_hz: raw.audio.sample_rate_hz,
+                buffer_frames: raw.audio.buffer_frames,
+            },
+        })
     }
 
     pub fn load_from_path(path: &Path) -> Result<Self, ConfigError> {
@@ -84,86 +174,86 @@ impl ProductConfig {
         Self::load_from_bytes(&bytes)
     }
 
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.schema_version != CONFIG_SCHEMA_VERSION {
-            return Err(ConfigError::new(
-                ConfigErrorKind::UnsupportedSchemaVersion,
-                format!(
-                    "configuration schema_version {} is unsupported; expected {CONFIG_SCHEMA_VERSION}",
-                    self.schema_version
-                ),
-            ));
-        }
-        self.runtime.validate()?;
-        validate_inclusive(
-            "backend.mock.work_iterations",
-            self.backend.mock.work_iterations,
-            0,
-            MAX_MOCK_WORK_ITERATIONS,
-        )?;
-        if self.audio.enabled
-            || self.audio.input_device != AudioDeviceSelection::Unconfigured
-            || self.audio.output_device != AudioDeviceSelection::Unconfigured
-            || self.audio.sample_rate_hz.is_some()
-            || self.audio.buffer_frames.is_some()
-        {
-            return Err(ConfigError::new(
-                ConfigErrorKind::Semantic,
-                "audio must remain disabled and unconfigured in Phase 0.5",
-            ));
-        }
-        Ok(())
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    pub const fn runtime(&self) -> &RuntimeConfig {
+        &self.runtime
+    }
+
+    pub const fn backend(&self) -> &BackendConfig {
+        &self.backend
+    }
+
+    pub const fn debug(&self) -> &DebugConfig {
+        &self.debug
+    }
+
+    pub const fn audio(&self) -> &AudioConfig {
+        &self.audio
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeConfig {
-    pub handshake_timeout_ms: u32,
-    pub request_timeout_ms: u32,
-    pub shutdown_timeout_ms: u32,
-    pub max_in_flight: u32,
-    pub command_queue_capacity: u32,
-    pub event_queue_capacity: u32,
-    pub stderr_tail_bytes: u32,
-    pub restart_max_attempts: u32,
-}
-
-impl RuntimeConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        for (name, value) in [
-            ("handshake_timeout_ms", self.handshake_timeout_ms),
-            ("request_timeout_ms", self.request_timeout_ms),
-            ("shutdown_timeout_ms", self.shutdown_timeout_ms),
-        ] {
-            validate_inclusive(name, value, 1, MAX_RUNTIME_TIMEOUT_MS)?;
-        }
-        validate_inclusive(
-            "max_in_flight",
-            self.max_in_flight,
-            1,
-            MAX_RUNTIME_IN_FLIGHT,
-        )?;
-        validate_inclusive(
-            "command_queue_capacity",
-            self.command_queue_capacity,
-            1,
-            MAX_RUNTIME_QUEUE_CAPACITY,
-        )?;
-        validate_inclusive(
-            "event_queue_capacity",
-            self.event_queue_capacity,
-            1,
-            MAX_RUNTIME_QUEUE_CAPACITY,
-        )?;
-        validate_inclusive(
-            "stderr_tail_bytes",
-            self.stderr_tail_bytes,
-            0,
-            MAX_STDERR_TAIL_BYTES,
-        )?;
-        Ok(())
+fn validate_raw(raw: &RawProductConfig) -> Result<(), ConfigError> {
+    if raw.schema_version != CONFIG_SCHEMA_VERSION {
+        return Err(ConfigError::new(
+            ConfigErrorKind::UnsupportedSchemaVersion,
+            format!(
+                "configuration schema_version {} is unsupported; expected {CONFIG_SCHEMA_VERSION}",
+                raw.schema_version
+            ),
+        ));
     }
+    for (name, value) in [
+        ("handshake_timeout_ms", raw.runtime.handshake_timeout_ms),
+        ("request_timeout_ms", raw.runtime.request_timeout_ms),
+        ("shutdown_timeout_ms", raw.runtime.shutdown_timeout_ms),
+    ] {
+        validate_inclusive(name, value, 1, MAX_RUNTIME_TIMEOUT_MS)?;
+    }
+    validate_inclusive(
+        "max_in_flight",
+        raw.runtime.max_in_flight,
+        1,
+        MAX_RUNTIME_IN_FLIGHT,
+    )?;
+    validate_inclusive(
+        "command_queue_capacity",
+        raw.runtime.command_queue_capacity,
+        1,
+        MAX_RUNTIME_QUEUE_CAPACITY,
+    )?;
+    validate_inclusive(
+        "event_queue_capacity",
+        raw.runtime.event_queue_capacity,
+        1,
+        MAX_RUNTIME_QUEUE_CAPACITY,
+    )?;
+    validate_inclusive(
+        "stderr_tail_bytes",
+        raw.runtime.stderr_tail_bytes,
+        0,
+        MAX_STDERR_TAIL_BYTES,
+    )?;
+    validate_inclusive(
+        "backend.mock.work_iterations",
+        raw.backend.mock.work_iterations,
+        0,
+        MAX_MOCK_WORK_ITERATIONS,
+    )?;
+    if raw.audio.enabled
+        || raw.audio.input_device != AudioDeviceSelection::Unconfigured
+        || raw.audio.output_device != AudioDeviceSelection::Unconfigured
+        || raw.audio.sample_rate_hz.is_some()
+        || raw.audio.buffer_frames.is_some()
+    {
+        return Err(ConfigError::new(
+            ConfigErrorKind::Semantic,
+            "audio must remain disabled and unconfigured in Phase 0.5",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_inclusive(
@@ -181,11 +271,66 @@ fn validate_inclusive(
     Ok(())
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeConfig {
+    handshake_timeout_ms: u32,
+    request_timeout_ms: u32,
+    shutdown_timeout_ms: u32,
+    max_in_flight: u32,
+    command_queue_capacity: u32,
+    event_queue_capacity: u32,
+    stderr_tail_bytes: u32,
+    restart_max_attempts: u32,
+}
+
+impl RuntimeConfig {
+    pub const fn handshake_timeout_ms(&self) -> u32 {
+        self.handshake_timeout_ms
+    }
+
+    pub const fn request_timeout_ms(&self) -> u32 {
+        self.request_timeout_ms
+    }
+
+    pub const fn shutdown_timeout_ms(&self) -> u32 {
+        self.shutdown_timeout_ms
+    }
+
+    pub const fn max_in_flight(&self) -> u32 {
+        self.max_in_flight
+    }
+
+    pub const fn command_queue_capacity(&self) -> u32 {
+        self.command_queue_capacity
+    }
+
+    pub const fn event_queue_capacity(&self) -> u32 {
+        self.event_queue_capacity
+    }
+
+    pub const fn stderr_tail_bytes(&self) -> u32 {
+        self.stderr_tail_bytes
+    }
+
+    pub const fn restart_max_attempts(&self) -> u32 {
+        self.restart_max_attempts
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackendConfig {
-    pub kind: BackendKind,
-    pub mock: MockBackendConfig,
+    kind: BackendKind,
+    mock: MockBackendConfig,
+}
+
+impl BackendConfig {
+    pub const fn kind(&self) -> BackendKind {
+        self.kind
+    }
+
+    pub const fn mock(&self) -> &MockBackendConfig {
+        &self.mock
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -194,17 +339,31 @@ pub enum BackendKind {
     Mock,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MockBackendConfig {
-    pub work_iterations: u32,
+    work_iterations: u32,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
+impl MockBackendConfig {
+    pub const fn work_iterations(&self) -> u32 {
+        self.work_iterations
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugConfig {
-    pub enabled: bool,
-    pub log_level: LogLevel,
+    enabled: bool,
+    log_level: LogLevel,
+}
+
+impl DebugConfig {
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub const fn log_level(&self) -> LogLevel {
+        self.log_level
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -217,14 +376,35 @@ pub enum LogLevel {
     Error,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AudioConfig {
-    pub enabled: bool,
-    pub input_device: AudioDeviceSelection,
-    pub output_device: AudioDeviceSelection,
-    pub sample_rate_hz: Option<u32>,
-    pub buffer_frames: Option<u32>,
+    enabled: bool,
+    input_device: AudioDeviceSelection,
+    output_device: AudioDeviceSelection,
+    sample_rate_hz: Option<u32>,
+    buffer_frames: Option<u32>,
+}
+
+impl AudioConfig {
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub const fn input_device(&self) -> AudioDeviceSelection {
+        self.input_device
+    }
+
+    pub const fn output_device(&self) -> AudioDeviceSelection {
+        self.output_device
+    }
+
+    pub const fn sample_rate_hz(&self) -> Option<u32> {
+        self.sample_rate_hz
+    }
+
+    pub const fn buffer_frames(&self) -> Option<u32> {
+        self.buffer_frames
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]

@@ -1,52 +1,231 @@
 use ai_voice_capability::{
-    Architecture, CapabilityAvailability, CapabilityProfile, EngineIdentity, ManagerCapability,
-    ManagerHealth, NativeRuntimeCapabilities, Platform, RuntimeBackend,
+    Architecture, CapabilityAvailability, CapabilityObservation, CapabilityProfile,
+    CapabilityProfileError, EngineIdentity, ManagerCapability, ManagerHealth,
+    NativeCapabilityError, NativeCapabilityMismatch, NativeRuntimeCapabilities,
+    ObservedRuntimeCapabilities, Platform, RuntimeBackend,
 };
 
 const MOCK_NATIVE: &[u8] = br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#;
 const UNAVAILABLE_NATIVE: &[u8] = br#"{"platform":"windows","architecture":"x86_64","runtime_version":"0.0.0","protocol_version":1,"backend":"unavailable","engine":"unavailable"}"#;
 
+fn native(bytes: &[u8]) -> NativeRuntimeCapabilities {
+    NativeRuntimeCapabilities::from_canonical_json(bytes).unwrap()
+}
+
+fn profile(
+    health: ManagerHealth,
+    generation: u64,
+    observation: &CapabilityObservation,
+) -> Result<CapabilityProfile, CapabilityProfileError> {
+    CapabilityProfile::from_observation(
+        RuntimeBackend::Mock,
+        ManagerCapability::new(health, generation)?,
+        observation,
+    )
+}
+
 #[test]
-fn native_capabilities_normalize_only_truthful_backend_engine_pairs() {
-    let mock = NativeRuntimeCapabilities::from_canonical_json(MOCK_NATIVE).unwrap();
-    assert_eq!(mock.platform, Platform::Macos);
-    assert_eq!(mock.architecture, Architecture::Arm64);
-    assert_eq!(mock.backend, RuntimeBackend::Mock);
+fn native_capability_errors_are_field_specific_actionable_and_payload_free() {
+    let cases = [
+        (MOCK_NATIVE, None),
+        (
+            br#"{"platform":"macos","architecture":"arm64","runtime_version":"9.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#.as_slice(),
+            Some(NativeCapabilityError::Mismatch(NativeCapabilityMismatch::RuntimeVersion)),
+        ),
+        (
+            br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":2,"backend":"mock","engine":"aivs-mock-v1"}"#,
+            Some(NativeCapabilityError::Mismatch(NativeCapabilityMismatch::ProtocolVersion)),
+        ),
+        (
+            br#"{"platform":"ios","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#,
+            Some(NativeCapabilityError::Mismatch(NativeCapabilityMismatch::Platform)),
+        ),
+        (
+            br#"{"platform":"macos","architecture":"riscv64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#,
+            Some(NativeCapabilityError::Mismatch(NativeCapabilityMismatch::Architecture)),
+        ),
+        (
+            br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"unavailable"}"#,
+            Some(NativeCapabilityError::Mismatch(NativeCapabilityMismatch::BackendEnginePair)),
+        ),
+        (
+            br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock"}"#,
+            Some(NativeCapabilityError::MalformedShape),
+        ),
+        (
+            br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1","cpu":"hidden"}"#,
+            Some(NativeCapabilityError::MalformedShape),
+        ),
+        (
+            br#"{"architecture":"arm64","platform":"macos","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#,
+            Some(NativeCapabilityError::NonCanonicalJson),
+        ),
+    ];
 
-    let unavailable = NativeRuntimeCapabilities::from_canonical_json(UNAVAILABLE_NATIVE).unwrap();
-    assert_eq!(unavailable.backend, RuntimeBackend::Unavailable);
-
-    for invalid in [
-        br#"{"platform":"macos","architecture":"arm64","runtime_version":"9.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#.as_slice(),
-        br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":2,"backend":"mock","engine":"aivs-mock-v1"}"#,
-        br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"unavailable"}"#,
-        br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"unavailable","engine":"aivs-mock-v1"}"#,
-        br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"other"}"#,
-        br#"{"platform":"ios","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#,
-        br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1","cpu":"M5"}"#,
-        br#"{"architecture":"arm64","platform":"macos","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#,
-    ] {
-        assert!(NativeRuntimeCapabilities::from_canonical_json(invalid).is_err());
+    for (bytes, expected) in cases {
+        match expected {
+            None => {
+                NativeRuntimeCapabilities::from_canonical_json(bytes).unwrap();
+            }
+            Some(expected) => {
+                let error = NativeRuntimeCapabilities::from_canonical_json(bytes).unwrap_err();
+                assert_eq!(error, expected);
+                let diagnostic = error.to_string();
+                assert!(!diagnostic.is_empty());
+                for raw_value in ["9.0.0", "riscv64", "ios", "unavailable"] {
+                    assert!(!diagnostic.contains(raw_value));
+                }
+                let _: &dyn std::error::Error = &error;
+            }
+        }
     }
 }
 
 #[test]
-fn capability_profile_json_is_stable_and_contains_no_inferred_hardware() {
-    let native = NativeRuntimeCapabilities::from_canonical_json(MOCK_NATIVE).unwrap();
-    let profile = CapabilityProfile::from_observation(
-        RuntimeBackend::Mock,
-        ManagerCapability {
-            health: ManagerHealth::Connected,
-            generation: 7,
-        },
-        Some(&native),
+fn native_capabilities_expose_only_validated_getters() {
+    let mock = native(MOCK_NATIVE);
+    assert_eq!(mock.platform(), Platform::Macos);
+    assert_eq!(mock.architecture(), Architecture::Arm64);
+    assert_eq!(mock.backend(), RuntimeBackend::Mock);
+    assert_eq!(mock.engine_identity(), Some(EngineIdentity::AivsMockV1));
+
+    let unavailable = native(UNAVAILABLE_NATIVE);
+    assert_eq!(unavailable.platform(), Platform::Windows);
+    assert_eq!(unavailable.architecture(), Architecture::X86_64);
+    assert_eq!(unavailable.backend(), RuntimeBackend::Unavailable);
+    assert_eq!(unavailable.engine_identity(), None);
+}
+
+#[test]
+fn literal_truth_table_covers_every_manager_state_and_query_outcome() {
+    let mock = native(MOCK_NATIVE);
+    let unavailable = native(UNAVAILABLE_NATIVE);
+    let cases = [
+        (
+            "stopped",
+            ManagerHealth::Stopped,
+            0,
+            CapabilityObservation::not_evaluated(0),
+            r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"stopped","generation":0}}"#,
+        ),
+        (
+            "starting",
+            ManagerHealth::Starting,
+            1,
+            CapabilityObservation::not_evaluated(1),
+            r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"not_evaluated"},"engine":{"identity":"aivs-mock-v1","availability":"not_evaluated"},"manager":{"health":"starting","generation":1}}"#,
+        ),
+        (
+            "connected-not-evaluated",
+            ManagerHealth::Connected,
+            1,
+            CapabilityObservation::not_evaluated(1),
+            r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"not_evaluated"},"manager":{"health":"connected","generation":1}}"#,
+        ),
+        (
+            "connected-inconclusive",
+            ManagerHealth::Connected,
+            1,
+            CapabilityObservation::inconclusive(1),
+            r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"unknown"},"manager":{"health":"connected","generation":1}}"#,
+        ),
+        (
+            "connected-mock",
+            ManagerHealth::Connected,
+            1,
+            CapabilityObservation::observed(
+                ObservedRuntimeCapabilities::new(1, mock.clone()).unwrap(),
+            ),
+            r#"{"schema_version":1,"platform":"macos","architecture":"arm64","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"available"},"manager":{"health":"connected","generation":1}}"#,
+        ),
+        (
+            "connected-unavailable-engine",
+            ManagerHealth::Connected,
+            1,
+            CapabilityObservation::observed(
+                ObservedRuntimeCapabilities::new(1, unavailable).unwrap(),
+            ),
+            r#"{"schema_version":1,"platform":"windows","architecture":"x86_64","runtime":{"version":"0.0.0","protocol_version":1,"backend":"unavailable","availability":"available"},"engine":{"identity":null,"availability":"unavailable"},"manager":{"health":"connected","generation":1}}"#,
+        ),
+        (
+            "stopping",
+            ManagerHealth::Stopping,
+            1,
+            CapabilityObservation::not_evaluated(1),
+            r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"stopping","generation":1}}"#,
+        ),
+        (
+            "crashed",
+            ManagerHealth::Crashed,
+            1,
+            CapabilityObservation::not_evaluated(1),
+            r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"crashed","generation":1}}"#,
+        ),
+        (
+            "error",
+            ManagerHealth::Error,
+            1,
+            CapabilityObservation::not_evaluated(1),
+            r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"error","generation":1}}"#,
+        ),
+    ];
+
+    for (name, health, generation, observation, expected) in cases {
+        let actual =
+            serde_json::to_string(&profile(health, generation, &observation).unwrap()).unwrap();
+        assert_eq!(actual, expected, "{name}");
+    }
+}
+
+#[test]
+fn unknown_requires_an_inconclusive_query_and_observations_match_generation() {
+    let not_evaluated = profile(
+        ManagerHealth::Connected,
+        7,
+        &CapabilityObservation::not_evaluated(7),
+    )
+    .unwrap();
+    assert_eq!(
+        not_evaluated.engine().availability(),
+        CapabilityAvailability::NotEvaluated
     );
 
-    let actual = serde_json::to_string(&profile).unwrap();
+    let inconclusive = profile(
+        ManagerHealth::Connected,
+        7,
+        &CapabilityObservation::inconclusive(7),
+    )
+    .unwrap();
     assert_eq!(
-        actual,
-        r#"{"schema_version":1,"platform":"macos","architecture":"arm64","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"available"},"manager":{"health":"connected","generation":7}}"#
+        inconclusive.engine().availability(),
+        CapabilityAvailability::Unknown
     );
+
+    let stale = profile(
+        ManagerHealth::Connected,
+        8,
+        &CapabilityObservation::inconclusive(7),
+    )
+    .unwrap_err();
+    assert_eq!(
+        stale,
+        CapabilityProfileError::StaleObservation {
+            manager_generation: 8,
+            observation_generation: 7,
+        }
+    );
+    assert!(ManagerCapability::new(ManagerHealth::Connected, 0).is_err());
+    assert!(ObservedRuntimeCapabilities::new(0, native(MOCK_NATIVE)).is_err());
+}
+
+#[test]
+fn capability_profile_contains_no_inferred_or_sensitive_hardware() {
+    let observation = CapabilityObservation::observed(
+        ObservedRuntimeCapabilities::new(7, native(MOCK_NATIVE)).unwrap(),
+    );
+    let actual =
+        serde_json::to_string(&profile(ManagerHealth::Connected, 7, &observation).unwrap())
+            .unwrap();
     for forbidden in [
         "cpu",
         "gpu",
@@ -63,78 +242,4 @@ fn capability_profile_json_is_stable_and_contains_no_inferred_hardware() {
             "leaked unsupported field {forbidden}"
         );
     }
-}
-
-#[test]
-fn unavailable_unknown_and_not_evaluated_are_distinct() {
-    let connected_unqueried = CapabilityProfile::from_observation(
-        RuntimeBackend::Mock,
-        ManagerCapability {
-            health: ManagerHealth::Connected,
-            generation: 1,
-        },
-        None,
-    );
-    assert_eq!(connected_unqueried.platform, Platform::Unknown);
-    assert_eq!(connected_unqueried.architecture, Architecture::Unknown);
-    assert_eq!(
-        connected_unqueried.runtime.availability,
-        CapabilityAvailability::NotEvaluated
-    );
-    assert_eq!(
-        connected_unqueried.engine.identity,
-        Some(EngineIdentity::AivsMockV1)
-    );
-    assert_eq!(
-        connected_unqueried.engine.availability,
-        CapabilityAvailability::NotEvaluated
-    );
-
-    let stopped = CapabilityProfile::from_observation(
-        RuntimeBackend::Mock,
-        ManagerCapability {
-            health: ManagerHealth::Stopped,
-            generation: 0,
-        },
-        None,
-    );
-    assert_eq!(
-        stopped.runtime.availability,
-        CapabilityAvailability::Unavailable
-    );
-    assert_eq!(
-        stopped.engine.availability,
-        CapabilityAvailability::Unavailable
-    );
-
-    let native = NativeRuntimeCapabilities::from_canonical_json(UNAVAILABLE_NATIVE).unwrap();
-    let unavailable = CapabilityProfile::from_observation(
-        RuntimeBackend::Mock,
-        ManagerCapability {
-            health: ManagerHealth::Connected,
-            generation: 2,
-        },
-        Some(&native),
-    );
-    assert_eq!(unavailable.runtime.backend, RuntimeBackend::Unavailable);
-    assert_eq!(
-        unavailable.runtime.availability,
-        CapabilityAvailability::Unavailable
-    );
-    assert_eq!(unavailable.engine.identity, None);
-    assert_eq!(
-        unavailable.engine.availability,
-        CapabilityAvailability::Unavailable
-    );
-
-    let unknown = serde_json::to_string(&CapabilityAvailability::Unknown).unwrap();
-    assert_eq!(unknown, r#""unknown""#);
-    assert_ne!(
-        CapabilityAvailability::Unknown,
-        CapabilityAvailability::Unavailable
-    );
-    assert_ne!(
-        CapabilityAvailability::Unavailable,
-        CapabilityAvailability::NotEvaluated
-    );
 }

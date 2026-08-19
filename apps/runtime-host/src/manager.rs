@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai_voice_capability::{
-    CapabilityProfile, ManagerCapability, ManagerHealth, NativeRuntimeCapabilities, RuntimeBackend,
+    CapabilityObservation, CapabilityProfile, CapabilityProfileError, ManagerCapability,
+    ManagerHealth, ObservedRuntimeCapabilities, RuntimeBackend,
 };
 use ai_voice_config::{
     BackendKind, MAX_MOCK_WORK_ITERATIONS, MAX_RUNTIME_IN_FLIGHT, MAX_RUNTIME_QUEUE_CAPACITY,
@@ -173,7 +174,7 @@ impl ManagerError {
         Self::new(
             ErrorCode::MalformedFrame,
             ManagerErrorKind::Payload,
-            format!("invalid {command:?} payload: {error:?}"),
+            format!("invalid {command:?} payload: {error}"),
         )
     }
 
@@ -237,28 +238,27 @@ impl RuntimeManagerConfig {
         runtime_path: PathBuf,
         plugin_path: PathBuf,
     ) -> Result<Self, ManagerError> {
-        product.validate().map_err(|error| {
-            ManagerError::invalid_configuration(format!(
-                "product configuration is invalid: {error}"
-            ))
-        })?;
-        let mock_work_iterations = match product.backend.kind {
-            BackendKind::Mock => product.backend.mock.work_iterations,
+        let mock_work_iterations = match product.backend().kind() {
+            BackendKind::Mock => product.backend().mock().work_iterations(),
         };
         let config = Self {
             runtime_path,
             plugin_path,
             mock_work_iterations,
             handshake_timeout: Duration::from_millis(u64::from(
-                product.runtime.handshake_timeout_ms,
+                product.runtime().handshake_timeout_ms(),
             )),
-            request_timeout: Duration::from_millis(u64::from(product.runtime.request_timeout_ms)),
-            shutdown_timeout: Duration::from_millis(u64::from(product.runtime.shutdown_timeout_ms)),
-            max_in_flight: product.runtime.max_in_flight as usize,
-            command_queue_capacity: product.runtime.command_queue_capacity as usize,
-            event_queue_capacity: product.runtime.event_queue_capacity as usize,
-            stderr_tail_bytes: product.runtime.stderr_tail_bytes as usize,
-            restart_max_attempts: product.runtime.restart_max_attempts,
+            request_timeout: Duration::from_millis(u64::from(
+                product.runtime().request_timeout_ms(),
+            )),
+            shutdown_timeout: Duration::from_millis(u64::from(
+                product.runtime().shutdown_timeout_ms(),
+            )),
+            max_in_flight: product.runtime().max_in_flight() as usize,
+            command_queue_capacity: product.runtime().command_queue_capacity() as usize,
+            event_queue_capacity: product.runtime().event_queue_capacity() as usize,
+            stderr_tail_bytes: product.runtime().stderr_tail_bytes() as usize,
+            restart_max_attempts: product.runtime().restart_max_attempts(),
         };
         config.validate()?;
         Ok(config)
@@ -403,15 +403,15 @@ impl RuntimeStatus {
     pub fn capability_profile(
         &self,
         product: &ProductConfig,
-        native: Option<&NativeRuntimeCapabilities>,
-    ) -> CapabilityProfile {
-        let configured_backend = match product.backend.kind {
+        observation: &CapabilityObservation,
+    ) -> Result<CapabilityProfile, CapabilityProfileError> {
+        let configured_backend = match product.backend().kind() {
             BackendKind::Mock => RuntimeBackend::Mock,
         };
         CapabilityProfile::from_observation(
             configured_backend,
-            ManagerCapability {
-                health: match self.state {
+            ManagerCapability::new(
+                match self.state {
                     RuntimeState::Stopped => ManagerHealth::Stopped,
                     RuntimeState::Starting => ManagerHealth::Starting,
                     RuntimeState::Connected => ManagerHealth::Connected,
@@ -419,9 +419,9 @@ impl RuntimeStatus {
                     RuntimeState::Crashed => ManagerHealth::Crashed,
                     RuntimeState::Error => ManagerHealth::Error,
                 },
-                generation: self.generation,
-            },
-            native,
+                self.generation,
+            )?,
+            observation,
         )
     }
 }
@@ -469,22 +469,31 @@ impl RuntimeManager {
                 "Ping payload exceeds the fixed command limit",
             ));
         }
-        self.request(Command::Ping, payload.to_vec()).await
+        self.request(Command::Ping, payload.to_vec())
+            .await
+            .map(|response| response.payload)
     }
 
-    pub async fn get_capabilities(&self) -> Result<NativeRuntimeCapabilities, ManagerError> {
-        let payload = self.request(Command::GetCapabilities, Vec::new()).await?;
-        parse_capabilities(&payload)
-            .map_err(|error| ManagerError::payload(error, Command::GetCapabilities))
+    pub async fn get_capabilities(&self) -> Result<ObservedRuntimeCapabilities, ManagerError> {
+        let response = self.request(Command::GetCapabilities, Vec::new()).await?;
+        let capabilities = parse_capabilities(&response.payload)
+            .map_err(|error| ManagerError::payload(error, Command::GetCapabilities))?;
+        ObservedRuntimeCapabilities::new(response.generation, capabilities).map_err(|error| {
+            ManagerError::protocol(format!("invalid capability response generation: {error}"))
+        })
     }
 
     pub async fn run_mock_pipeline(&self) -> Result<MockPipelineSummary, ManagerError> {
-        let payload = self.request(Command::RunMockPipeline, Vec::new()).await?;
-        parse_mock_pipeline_summary(&payload)
+        let response = self.request(Command::RunMockPipeline, Vec::new()).await?;
+        parse_mock_pipeline_summary(&response.payload)
             .map_err(|error| ManagerError::payload(error, Command::RunMockPipeline))
     }
 
-    async fn request(&self, command: Command, payload: Vec<u8>) -> Result<Vec<u8>, ManagerError> {
+    async fn request(
+        &self,
+        command: Command,
+        payload: Vec<u8>,
+    ) -> Result<RuntimeResponse, ManagerError> {
         let (reply, receiver) = oneshot::channel();
         self.send(ActorCommand::Request {
             command,
@@ -520,8 +529,14 @@ enum ActorCommand {
     Request {
         command: Command,
         payload: Vec<u8>,
-        reply: oneshot::Sender<Result<Vec<u8>, ManagerError>>,
+        reply: oneshot::Sender<Result<RuntimeResponse, ManagerError>>,
     },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RuntimeResponse {
+    generation: u64,
+    payload: Vec<u8>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -558,7 +573,7 @@ struct PendingRequest {
     reply: PendingReply,
 }
 
-type PendingReply = oneshot::Sender<Result<Vec<u8>, ManagerError>>;
+type PendingReply = oneshot::Sender<Result<RuntimeResponse, ManagerError>>;
 type StatusReply = oneshot::Sender<Result<RuntimeStatus, ManagerError>>;
 
 struct PendingRequests {
@@ -579,7 +594,7 @@ impl PendingRequests {
         request_id: u64,
         command: Command,
         deadline: Instant,
-        reply: oneshot::Sender<Result<Vec<u8>, ManagerError>>,
+        reply: oneshot::Sender<Result<RuntimeResponse, ManagerError>>,
     ) -> Result<(), CorrelationError> {
         if self.entries.len() >= self.maximum {
             return Err(CorrelationError::PendingLimit);
@@ -602,7 +617,7 @@ impl PendingRequests {
         &mut self,
         request_id: u64,
         command: Command,
-        result: Result<Vec<u8>, ManagerError>,
+        result: Result<RuntimeResponse, ManagerError>,
     ) -> Result<(), CorrelationError> {
         let pending = self
             .entries
@@ -1078,7 +1093,7 @@ impl Actor {
         &mut self,
         command: Command,
         payload: Vec<u8>,
-        reply: oneshot::Sender<Result<Vec<u8>, ManagerError>>,
+        reply: oneshot::Sender<Result<RuntimeResponse, ManagerError>>,
     ) {
         if self.state.state != RuntimeState::Connected {
             let error = if self.state.state == RuntimeState::Stopping {
@@ -1176,7 +1191,7 @@ impl Actor {
             return;
         }
         match event {
-            ProcessEvent::Message { message, .. } => self.handle_message(message).await,
+            ProcessEvent::Message { message, .. } => self.handle_message(generation, message).await,
             ProcessEvent::Eof { clean, .. } => {
                 if !clean {
                     self.fail_stream(
@@ -1209,7 +1224,7 @@ impl Actor {
         }
     }
 
-    async fn handle_message(&mut self, message: RuntimeMessage) {
+    async fn handle_message(&mut self, generation: u64, message: RuntimeMessage) {
         if self.state.state == RuntimeState::Starting {
             if message.kind != MessageKind::Hello {
                 self.fail_stream(
@@ -1266,7 +1281,10 @@ impl Actor {
                     .await;
                 return;
             }
-            Ok(message.payload)
+            Ok(RuntimeResponse {
+                generation,
+                payload: message.payload,
+            })
         } else {
             Err(remote_error(message.error_code, &message.payload))
         };
@@ -1961,15 +1979,42 @@ mod tests {
         );
 
         pending
-            .complete(7, Command::Ping, Ok(vec![1, 2, 3]))
+            .complete(
+                7,
+                Command::Ping,
+                Ok(RuntimeResponse {
+                    generation: 3,
+                    payload: vec![1, 2, 3],
+                }),
+            )
             .unwrap();
-        assert_eq!(first_rx.await.unwrap().unwrap(), vec![1, 2, 3]);
         assert_eq!(
-            pending.complete(7, Command::Ping, Ok(Vec::new())),
+            first_rx.await.unwrap().unwrap(),
+            RuntimeResponse {
+                generation: 3,
+                payload: vec![1, 2, 3],
+            }
+        );
+        assert_eq!(
+            pending.complete(
+                7,
+                Command::Ping,
+                Ok(RuntimeResponse {
+                    generation: 3,
+                    payload: Vec::new(),
+                }),
+            ),
             Err(CorrelationError::UnknownRequest)
         );
         assert_eq!(
-            pending.complete(8, Command::Ping, Ok(Vec::new())),
+            pending.complete(
+                8,
+                Command::Ping,
+                Ok(RuntimeResponse {
+                    generation: 3,
+                    payload: Vec::new(),
+                }),
+            ),
             Err(CorrelationError::CommandMismatch)
         );
     }

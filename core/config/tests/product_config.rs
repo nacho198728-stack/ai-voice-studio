@@ -38,30 +38,30 @@ fn checked_in_default_is_the_exact_validated_development_contract() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config/config.json");
     let config = ProductConfig::load_from_path(&path).expect("checked-in config must load");
 
-    assert_eq!(config.schema_version, 1);
-    assert_eq!(config.runtime.handshake_timeout_ms, 2_000);
-    assert_eq!(config.runtime.request_timeout_ms, 2_000);
-    assert_eq!(config.runtime.shutdown_timeout_ms, 2_000);
-    assert_eq!(config.runtime.max_in_flight, 16);
-    assert_eq!(config.runtime.command_queue_capacity, 32);
-    assert_eq!(config.runtime.event_queue_capacity, 32);
-    assert_eq!(config.runtime.stderr_tail_bytes, 8_192);
-    assert_eq!(config.runtime.restart_max_attempts, 0);
-    assert_eq!(config.backend.kind, BackendKind::Mock);
-    assert_eq!(config.backend.mock.work_iterations, 0);
-    assert!(!config.debug.enabled);
-    assert_eq!(config.debug.log_level, LogLevel::Info);
-    assert!(!config.audio.enabled);
+    assert_eq!(config.schema_version(), 1);
+    assert_eq!(config.runtime().handshake_timeout_ms(), 2_000);
+    assert_eq!(config.runtime().request_timeout_ms(), 2_000);
+    assert_eq!(config.runtime().shutdown_timeout_ms(), 2_000);
+    assert_eq!(config.runtime().max_in_flight(), 16);
+    assert_eq!(config.runtime().command_queue_capacity(), 32);
+    assert_eq!(config.runtime().event_queue_capacity(), 32);
+    assert_eq!(config.runtime().stderr_tail_bytes(), 8_192);
+    assert_eq!(config.runtime().restart_max_attempts(), 0);
+    assert_eq!(config.backend().kind(), BackendKind::Mock);
+    assert_eq!(config.backend().mock().work_iterations(), 0);
+    assert!(!config.debug().enabled());
+    assert_eq!(config.debug().log_level(), LogLevel::Info);
+    assert!(!config.audio().enabled());
     assert_eq!(
-        config.audio.input_device,
+        config.audio().input_device(),
         AudioDeviceSelection::Unconfigured
     );
     assert_eq!(
-        config.audio.output_device,
+        config.audio().output_device(),
         AudioDeviceSelection::Unconfigured
     );
-    assert_eq!(config.audio.sample_rate_hz, None);
-    assert_eq!(config.audio.buffer_frames, None);
+    assert_eq!(config.audio().sample_rate_hz(), None);
+    assert_eq!(config.audio().buffer_frames(), None);
 }
 
 #[test]
@@ -183,87 +183,111 @@ fn schema_backend_debug_and_audio_claims_are_strict() {
 
 #[test]
 fn every_numeric_semantic_boundary_is_enforced() {
-    let valid_cases = [
-        VALID.replace(
-            "\"handshake_timeout_ms\": 2000",
-            "\"handshake_timeout_ms\": 1",
-        ),
-        VALID.replace(
-            "\"request_timeout_ms\": 2000",
-            "\"request_timeout_ms\": 300000",
-        ),
-        VALID.replace(
-            "\"shutdown_timeout_ms\": 2000",
-            "\"shutdown_timeout_ms\": 1",
-        ),
-        VALID.replace("\"max_in_flight\": 16", "\"max_in_flight\": 64"),
-        VALID.replace(
-            "\"command_queue_capacity\": 32",
-            "\"command_queue_capacity\": 1",
-        ),
-        VALID.replace(
-            "\"event_queue_capacity\": 32",
-            "\"event_queue_capacity\": 256",
-        ),
-        VALID.replace("\"stderr_tail_bytes\": 8192", "\"stderr_tail_bytes\": 0"),
-        VALID.replace(
-            "\"stderr_tail_bytes\": 8192",
-            "\"stderr_tail_bytes\": 65536",
-        ),
-        VALID.replace("\"work_iterations\": 0", "\"work_iterations\": 1000000"),
-        VALID.replace(
-            "\"restart_max_attempts\": 0",
-            "\"restart_max_attempts\": 4294967295",
-        ),
-    ];
-    for text in valid_cases {
-        parse(&text).expect("inclusive boundary must load");
+    struct Boundary {
+        name: &'static str,
+        original: &'static str,
+        minimum: &'static str,
+        below_minimum: &'static str,
+        maximum: &'static str,
+        above_maximum: &'static str,
     }
-
-    let invalid_cases = [
-        VALID.replace(
-            "\"handshake_timeout_ms\": 2000",
-            "\"handshake_timeout_ms\": 0",
-        ),
-        VALID.replace(
-            "\"request_timeout_ms\": 2000",
-            "\"request_timeout_ms\": 300001",
-        ),
-        VALID.replace(
-            "\"shutdown_timeout_ms\": 2000",
-            "\"shutdown_timeout_ms\": 0",
-        ),
-        VALID.replace("\"max_in_flight\": 16", "\"max_in_flight\": 0"),
-        VALID.replace("\"max_in_flight\": 16", "\"max_in_flight\": 65"),
-        VALID.replace(
-            "\"command_queue_capacity\": 32",
-            "\"command_queue_capacity\": 0",
-        ),
-        VALID.replace(
-            "\"command_queue_capacity\": 32",
-            "\"command_queue_capacity\": 257",
-        ),
-        VALID.replace(
-            "\"event_queue_capacity\": 32",
-            "\"event_queue_capacity\": 0",
-        ),
-        VALID.replace(
-            "\"event_queue_capacity\": 32",
-            "\"event_queue_capacity\": 257",
-        ),
-        VALID.replace(
-            "\"stderr_tail_bytes\": 8192",
-            "\"stderr_tail_bytes\": 65537",
-        ),
-        VALID.replace("\"work_iterations\": 0", "\"work_iterations\": 1000001"),
-        VALID.replace("\"work_iterations\": 0", "\"work_iterations\": -1"),
-        VALID.replace(
-            "\"restart_max_attempts\": 0",
-            "\"restart_max_attempts\": 4294967296",
-        ),
+    let boundaries = [
+        Boundary {
+            name: "handshake timeout",
+            original: "\"handshake_timeout_ms\": 2000",
+            minimum: "1",
+            below_minimum: "0",
+            maximum: "300000",
+            above_maximum: "300001",
+        },
+        Boundary {
+            name: "request timeout",
+            original: "\"request_timeout_ms\": 2000",
+            minimum: "1",
+            below_minimum: "0",
+            maximum: "300000",
+            above_maximum: "300001",
+        },
+        Boundary {
+            name: "shutdown timeout",
+            original: "\"shutdown_timeout_ms\": 2000",
+            minimum: "1",
+            below_minimum: "0",
+            maximum: "300000",
+            above_maximum: "300001",
+        },
+        Boundary {
+            name: "max in flight",
+            original: "\"max_in_flight\": 16",
+            minimum: "1",
+            below_minimum: "0",
+            maximum: "64",
+            above_maximum: "65",
+        },
+        Boundary {
+            name: "command queue",
+            original: "\"command_queue_capacity\": 32",
+            minimum: "1",
+            below_minimum: "0",
+            maximum: "256",
+            above_maximum: "257",
+        },
+        Boundary {
+            name: "event queue",
+            original: "\"event_queue_capacity\": 32",
+            minimum: "1",
+            below_minimum: "0",
+            maximum: "256",
+            above_maximum: "257",
+        },
+        Boundary {
+            name: "stderr retention",
+            original: "\"stderr_tail_bytes\": 8192",
+            minimum: "0",
+            below_minimum: "-1",
+            maximum: "65536",
+            above_maximum: "65537",
+        },
+        Boundary {
+            name: "Mock work",
+            original: "\"work_iterations\": 0",
+            minimum: "0",
+            below_minimum: "-1",
+            maximum: "1000000",
+            above_maximum: "1000001",
+        },
+        Boundary {
+            name: "restart attempts",
+            original: "\"restart_max_attempts\": 0",
+            minimum: "0",
+            below_minimum: "-1",
+            maximum: "4294967295",
+            above_maximum: "4294967296",
+        },
     ];
-    for text in invalid_cases {
-        assert!(parse(&text).is_err(), "accepted invalid boundary: {text}");
+
+    for boundary in boundaries {
+        for (label, value, accepted) in [
+            ("minimum", boundary.minimum, true),
+            ("below minimum", boundary.below_minimum, false),
+            ("maximum", boundary.maximum, true),
+            ("above maximum", boundary.above_maximum, false),
+        ] {
+            let field_name = boundary.original.split(':').next().unwrap();
+            let replacement = format!("{field_name}: {value}");
+            assert!(
+                VALID.contains(boundary.original),
+                "{} fixture field",
+                boundary.name
+            );
+            let text = VALID.replacen(boundary.original, &replacement, 1);
+            assert_eq!(
+                parse(&text).is_ok(),
+                accepted,
+                "{} {label}={value}",
+                boundary.name
+            );
+        }
     }
 }
 

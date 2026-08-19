@@ -1,4 +1,6 @@
-use ai_voice_capability::NativeRuntimeCapabilities;
+use std::fmt;
+
+use ai_voice_capability::{NativeCapabilityError, NativeRuntimeCapabilities};
 use ai_voice_contracts::{IPC_PROTOCOL_CURRENT_VERSION, RUNTIME_VERSION};
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +39,17 @@ pub struct MockPipelineSummary {
 pub(crate) enum PayloadError {
     Malformed,
     ContractMismatch,
+    NativeCapability(NativeCapabilityError),
+}
+
+impl fmt::Display for PayloadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Malformed => formatter.write_str("payload is malformed"),
+            Self::ContractMismatch => formatter.write_str("payload violates the fixed contract"),
+            Self::NativeCapability(error) => error.fmt(formatter),
+        }
+    }
 }
 
 pub(crate) fn parse_hello(payload: &[u8]) -> Result<Hello, PayloadError> {
@@ -54,12 +67,7 @@ pub(crate) fn parse_hello(payload: &[u8]) -> Result<Hello, PayloadError> {
 pub(crate) fn parse_capabilities(
     payload: &[u8],
 ) -> Result<NativeRuntimeCapabilities, PayloadError> {
-    NativeRuntimeCapabilities::from_canonical_json(payload).map_err(|error| match error {
-        ai_voice_capability::NativeCapabilityError::Malformed => PayloadError::Malformed,
-        ai_voice_capability::NativeCapabilityError::ContractMismatch => {
-            PayloadError::ContractMismatch
-        }
-    })
+    NativeRuntimeCapabilities::from_canonical_json(payload).map_err(PayloadError::NativeCapability)
 }
 
 fn parse_exact_json<T>(payload: &[u8]) -> Result<T, PayloadError>
@@ -126,7 +134,7 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ai_voice_capability::{Architecture, NativeEngine, Platform, RuntimeBackend};
+    use ai_voice_capability::{Architecture, EngineIdentity, Platform, RuntimeBackend};
 
     #[test]
     fn hello_parser_accepts_only_the_canonical_healthy_startup_contract() {
@@ -160,17 +168,20 @@ mod tests {
         )
         .expect("canonical capabilities must parse");
 
-        assert_eq!(capabilities.platform, Platform::Macos);
-        assert_eq!(capabilities.architecture, Architecture::Arm64);
-        assert_eq!(capabilities.backend, RuntimeBackend::Mock);
-        assert_eq!(capabilities.engine, NativeEngine::AivsMockV1);
+        assert_eq!(capabilities.platform(), Platform::Macos);
+        assert_eq!(capabilities.architecture(), Architecture::Arm64);
+        assert_eq!(capabilities.backend(), RuntimeBackend::Mock);
+        assert_eq!(
+            capabilities.engine_identity(),
+            Some(EngineIdentity::AivsMockV1)
+        );
 
         let unavailable = parse_capabilities(
             br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"unavailable","engine":"unavailable"}"#,
         )
         .expect("canonical unavailable capabilities must parse");
-        assert_eq!(unavailable.backend, RuntimeBackend::Unavailable);
-        assert_eq!(unavailable.engine, NativeEngine::Unavailable);
+        assert_eq!(unavailable.backend(), RuntimeBackend::Unavailable);
+        assert_eq!(unavailable.engine_identity(), None);
 
         for malformed in [
             br#"{"platform":"ios","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#.as_slice(),

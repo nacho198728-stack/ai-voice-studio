@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use ai_voice_capability::{
-    CapabilityAvailability, EngineIdentity, ManagerHealth, NativeEngine, RuntimeBackend,
+    CapabilityAvailability, CapabilityObservation, CapabilityProfileError, EngineIdentity,
+    ManagerHealth, ObservedRuntimeCapabilities, RuntimeBackend,
 };
 use ai_voice_config::ProductConfig;
 use ai_voice_runtime_host::{
@@ -18,12 +19,12 @@ fn absolute_resource(name: &str) -> PathBuf {
     std::env::current_dir().unwrap().join("build").join(name)
 }
 
-fn connected_status() -> RuntimeStatus {
+fn status(state: RuntimeState, generation: u64) -> RuntimeStatus {
     RuntimeStatus {
-        state: RuntimeState::Connected,
-        generation: 7,
-        pid: Some(42),
-        hello: Some(Hello {
+        state,
+        generation,
+        pid: (state == RuntimeState::Connected).then_some(42),
+        hello: (state == RuntimeState::Connected).then(|| Hello {
             runtime_version: "0.0.0".to_owned(),
             protocol_version: 1,
             generation: 1,
@@ -75,55 +76,51 @@ fn validated_product_config_maps_every_launch_setting_but_not_resource_authority
 }
 
 #[test]
-fn status_and_native_capabilities_map_to_shared_truthful_profile() {
+fn status_and_generation_bound_native_observation_map_to_shared_profile() {
     let product = default_config();
     let native = RuntimeCapabilities::from_canonical_json(
         br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#,
     )
     .unwrap();
-    assert_eq!(native.backend, RuntimeBackend::Mock);
-    assert_eq!(native.engine, NativeEngine::AivsMockV1);
+    let observation =
+        CapabilityObservation::observed(ObservedRuntimeCapabilities::new(7, native).unwrap());
 
-    let profile = connected_status().capability_profile(&product, Some(&native));
+    let profile = status(RuntimeState::Connected, 7)
+        .capability_profile(&product, &observation)
+        .unwrap();
 
-    assert_eq!(profile.manager.health, ManagerHealth::Connected);
-    assert_eq!(profile.manager.generation, 7);
-    assert_eq!(profile.runtime.backend, RuntimeBackend::Mock);
+    assert_eq!(profile.manager().health(), ManagerHealth::Connected);
+    assert_eq!(profile.manager().generation(), 7);
+    assert_eq!(profile.runtime().backend(), RuntimeBackend::Mock);
     assert_eq!(
-        profile.runtime.availability,
+        profile.runtime().availability(),
         CapabilityAvailability::Available
     );
-    assert_eq!(profile.engine.identity, Some(EngineIdentity::AivsMockV1));
     assert_eq!(
-        serde_json::to_string(&profile).unwrap(),
-        r#"{"schema_version":1,"platform":"macos","architecture":"arm64","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"available"},"manager":{"health":"connected","generation":7}}"#
+        profile.engine().identity(),
+        Some(EngineIdentity::AivsMockV1)
     );
 }
 
 #[test]
-fn connected_without_query_is_not_evaluated_and_stopped_is_unavailable() {
+fn stale_observation_is_rejected_after_generation_advance() {
     let product = default_config();
-    let connected = connected_status().capability_profile(&product, None);
-    assert_eq!(
-        connected.runtime.availability,
-        CapabilityAvailability::NotEvaluated
-    );
-    assert_eq!(
-        connected.engine.availability,
-        CapabilityAvailability::NotEvaluated
-    );
+    let old_native = RuntimeCapabilities::from_canonical_json(
+        br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#,
+    )
+    .unwrap();
+    let old_observation =
+        CapabilityObservation::observed(ObservedRuntimeCapabilities::new(1, old_native).unwrap());
 
-    let mut stopped_status = connected_status();
-    stopped_status.state = RuntimeState::Stopped;
-    stopped_status.pid = None;
-    let stopped = stopped_status.capability_profile(&product, None);
-    assert_eq!(stopped.manager.health, ManagerHealth::Stopped);
+    let error = status(RuntimeState::Connected, 2)
+        .capability_profile(&product, &old_observation)
+        .unwrap_err();
+
     assert_eq!(
-        stopped.runtime.availability,
-        CapabilityAvailability::Unavailable
-    );
-    assert_eq!(
-        stopped.engine.availability,
-        CapabilityAvailability::Unavailable
+        error,
+        CapabilityProfileError::StaleObservation {
+            manager_generation: 2,
+            observation_generation: 1,
+        }
     );
 }
