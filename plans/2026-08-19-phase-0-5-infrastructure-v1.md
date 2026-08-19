@@ -48,7 +48,7 @@
 
 - [x] 实现 Rust RuntimeManager 状态机。提供 start_runtime、stop_runtime、get_runtime_status 和 get_capabilities，并增加内部的握手、request correlation、超时、优雅关闭、进程退出监控、标准错误收集和崩溃恢复接口；状态至少包括 stopped、starting、connected、stopping、crashed 和 error。受影响路径包括 `apps/runtime-host`。Phase 0.5 只建立有限重启策略接口，不实现无限自动重启。
 
-- [ ] 建立统一日志结构。Rust 使用 tracing，C++ 使用 spdlog，统一 timestamp、component、level、message 和可选 request_id/generation 字段；默认写入开发日志目录，DEBUG 仅由配置打开，Mock 的 process_audio 热路径只更新原子指标而不逐帧打印。受影响路径包括 `core/telemetry`、`apps/runtime-host`、C++ Runtime 日志模块和 `config/config.json`。
+- [x] 建立统一日志结构。Rust 使用 tracing，C++ 使用 spdlog，统一 timestamp、component、level、message 和可选 request_id/generation 字段；默认写入开发日志目录，DEBUG 仅由配置打开，Mock 的 process_audio 热路径只更新原子指标而不逐帧打印。受影响路径包括 `core/telemetry`、`apps/runtime-host`、C++ Runtime 日志模块和 `config/config.json`。
 
 - [x] 建立最小配置与能力模型。创建版本化 `config/config.json`，包含 runtime、audio 占位设置、backend=mock 和 debug；定义 Hardware/Runtime/Engine capability 的最小结构，但 Phase 0.5 只返回平台、架构、Runtime version、Mock backend 和 Mock Engine 能力，不进行硬件 Benchmark。受影响路径包括 `core/capability`、`core/model-package`、`core/telemetry` 和配置加载模块。
 
