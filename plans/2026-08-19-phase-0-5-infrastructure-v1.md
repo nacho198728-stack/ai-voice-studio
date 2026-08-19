@@ -40,7 +40,7 @@
 
 - [x] 定义第一版 VoiceEngine C ABI 及其合同。`runtime/api/voice_engine.h` 覆盖规定的八类操作，结构携带 ABI version 与 struct size；ADR 明确 caller-owned buffer、编码、错误/异常边界、生命周期和线程规则，prepare 后的处理调用禁止分配、锁和日志。
 
-- [ ] 实现 C++20 `voice-runtime` 独立进程骨架。Runtime 启动后输出版本化握手，进入命令循环，支持 ping、get_capabilities、run_mock_pipeline、shutdown 与统一错误返回；进程不打开音频设备、不加载 AI Runtime。为后续故障恢复保留退出原因、generation 和健康状态。受影响路径包括 `runtime/session`、`runtime/scheduler`、`runtime/loader`、`backend/mock` 和 CMake targets。
+- [x] 实现 C++20 `voice-runtime` 独立进程骨架。Runtime 启动后输出版本化握手，进入命令循环，支持 ping、get_capabilities、run_mock_pipeline、shutdown 与统一错误返回；进程不打开音频设备、不加载 AI Runtime。为后续故障恢复保留退出原因、generation 和健康状态。受影响路径包括 `runtime/session`、`runtime/scheduler`、`runtime/loader`、`backend/mock` 和 CMake targets。
 
 - [ ] 实现 Mock VoiceEngine 动态插件。Mock Engine 通过唯一的 C ABI 工厂入口暴露函数表，支持确定性初始化、模拟模型加载、流准备、可配置处理延迟、固定且可校验的 PCM 转换、reset 和 metrics；它不得引用 Rust/Tauri 或任何 AI/音频设备依赖。受影响路径包括 `engines/mock` 和 `backend/mock`。确定性输出让端到端测试可以验证确实调用了插件，而不是只验证 Runtime 存活。
 
