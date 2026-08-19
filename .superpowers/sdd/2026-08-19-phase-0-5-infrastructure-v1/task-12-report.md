@@ -47,10 +47,13 @@ hardware inspection, model behavior, and user features were not modified.
 - `RuntimeManagerConfig::from_product_config` consumes the invariant-bearing
   product config and
   receives explicit Runtime/plugin paths from its caller. `RuntimeStatus` maps
-  state/generation plus an explicit query observation into the shared profile.
-  Actor responses carry the manager generation; `get_capabilities` returns a
-  generation-bound wrapper and profile construction rejects stale observations
-  after restart. The checked-in file never owns packaged resource paths.
+  state/generation plus an actor-authorized query observation into the shared
+  profile. `get_capabilities` and `capabilities_not_evaluated` return opaque
+  actor-minted outcomes: observed data, query failures, and not-yet-evaluated
+  state all carry the authoritative manager generation. Their constructors and
+  fields are private, so callers cannot copy native data or relabel an old
+  failure after restart. Profile construction rejects both kinds of stale
+  outcome. The checked-in file never owns packaged resource paths.
 - `core/model-package` and `core/telemetry` contain ownership documentation
   only. No package parser, logger, tracing subscriber, sink, directory, or file
   output was implemented.
@@ -67,7 +70,9 @@ hardware inspection, model behavior, and user features were not modified.
   `apps/runtime-host/src/lib.rs`, `apps/runtime-host/src/manager.rs`,
   `apps/runtime-host/src/payload.rs`,
   `apps/runtime-host/tests/config_capability.rs`, and the typed expectation in
-  `apps/runtime-host/tests/runtime_manager_process.rs`.
+  `apps/runtime-host/tests/runtime_manager_process.rs`; controlled actor
+  provenance cases are in `apps/runtime-host/tests/runtime_manager_fixture.rs`
+  and `tests/fixtures/runtime_manager_child_fixture.cpp`.
 - Workspace/lock: `Cargo.toml`, `Cargo.lock`.
 - Policy/ownership docs: `core/README.md`,
   `docs/development/CONFIGURATION.md`, `core/model-package/README.md`, and
@@ -105,6 +110,13 @@ hardware inspection, model behavior, and user features were not modified.
   maximum, and above-maximum for each timeout, pending/queue bound, stderr
   retention, Mock work iterations, and the representational restart-attempt
   bound. The public no-Deserialize invariant has a compile-fail doctest.
+- Re-review RED recorded two `compile_fail` examples unexpectedly compiling:
+  public callers could relabel copied native data and failed/not-evaluated
+  states. GREEN moves the generation-bound outcome into RuntimeHost with no
+  public constructor, has the actor mint all three outcomes, and adds controlled
+  restart coverage proving old successful and old failed observations are both
+  stale. Two adversarial compile-fail tests prove rebinding is unavailable to
+  external callers.
 
 ## Verification
 
@@ -112,17 +124,18 @@ hardware inspection, model behavior, and user features were not modified.
 - `cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings` —
   passed without warnings.
 - `cargo +1.97.1 check --locked --workspace` — passed.
-- `cargo +1.97.1 test --locked --workspace` — passed: 36 unit/integration tests
-  plus one compile-fail doctest executed, 0 failed; 17 native-path/controlled-
-  child cases remained CTest-owned.
+- `cargo +1.97.1 test --locked --workspace` — passed: 34 unit/integration tests
+  plus three compile-fail doctests executed, 0 failed; 19 native-path/
+  controlled-child cases remained CTest-owned.
 - Checked-in default config path load and full malformed/boundary matrix —
-  passed; bytes before/after the loader test were identical, an independent
-  byte-for-byte snapshot comparison passed, and loading a missing path did not
-  create it.
+  passed; the loader test's exact bytes before and after loading were identical,
+  and loading a missing path did not create it. No independent checked-in byte
+  snapshot fixture is claimed.
 - Fresh Debug configure/build/CTest — passed 15/15, including real-child
-  RuntimeManager and controlled hostile-child regressions.
+  RuntimeManager, actor-minted not-evaluated state, stale failed-query restart,
+  and controlled hostile-child regressions.
 - Fresh Release configure/build/CTest — passed 15/15, including the same real
-  child, deadline, ordered-reap, and no-orphan coverage.
+  child, provenance/restart, deadline, ordered-reap, and no-orphan coverage.
 - `pnpm test` — passed: contract drift/generation 6/6 and doctor 7/7.
 - `git diff --check` and staged diff check — passed.
 
@@ -130,6 +143,7 @@ hardware inspection, model behavior, and user features were not modified.
 
 - `7d79170` — `feat(core): add config and capability contracts`
 - `b57189b` — `fix(core): enforce capability observation invariants`
+- `27db08f` — `fix(runtime): seal capability observation provenance`
 
 ## Self-review
 
@@ -145,8 +159,9 @@ hardware inspection, model behavior, and user features were not modified.
   no CPU/GPU/RAM/NPU/audio/device/driver/benchmark/machine fields.
 - Public composite configuration/native/profile types cannot be directly
   deserialized or field-mutated into an invalid state. Public capability output
-  is Serialize-only; validated constructors enforce manager and observation
-  generation rules before any profile can exist.
+  is Serialize-only. RuntimeHost's opaque observation has no public constructor;
+  generation provenance is checked before an actor-authorized outcome can be
+  projected into a profile.
 - Dependencies remain pinned to existing workspace Serde versions; the lockfile
   adds only the two local crates and their already-locked dependencies.
 
