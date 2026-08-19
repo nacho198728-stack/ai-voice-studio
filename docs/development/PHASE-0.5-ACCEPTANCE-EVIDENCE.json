@@ -62,9 +62,9 @@
         "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices"
       ],
       "symbolCounts": {
-        "undefinedObservations": 292,
+        "undefinedTotal": 292,
         "undefinedUnique": 292,
-        "globalObservations": 2624,
+        "globalTotal": 2624,
         "globalUnique": 2624
       },
       "inspections": {
@@ -112,9 +112,9 @@
         "/usr/lib/libSystem.B.dylib"
       ],
       "symbolCounts": {
-        "undefinedObservations": 161,
+        "undefinedTotal": 161,
         "undefinedUnique": 161,
-        "globalObservations": 665,
+        "globalTotal": 665,
         "globalUnique": 665
       },
       "inspections": {
@@ -163,9 +163,9 @@
         "/usr/lib/libSystem.B.dylib"
       ],
       "symbolCounts": {
-        "undefinedObservations": 4,
+        "undefinedTotal": 4,
         "undefinedUnique": 4,
-        "globalObservations": 5,
+        "globalTotal": 5,
         "globalUnique": 5
       },
       "inspections": {
@@ -205,9 +205,9 @@
     }
   ],
   "symbolTotals": {
-    "undefinedObservations": 457,
+    "undefinedTotal": 457,
     "undefinedUnique": 433,
-    "globalObservations": 3294,
+    "globalTotal": 3294,
     "globalUnique": 3268
   },
   "versions": {

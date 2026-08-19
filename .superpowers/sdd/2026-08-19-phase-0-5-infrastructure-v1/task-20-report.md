@@ -79,7 +79,7 @@ paths independently of the executing checkout. The report suite passed 4/4.
   Ninja 1.13.2, Git 2.50.1, and Xcode 26.6 passed; MSVC was correctly skipped.
 - Frozen install and contracts: passed without lockfile drift.
 - Root pnpm gate: contracts 6/6, doctor 7/7, staging 3/3, bundle 3/3,
-  workflow 4/4, docs 8/8, Task 20 gates 17/17, and frontend 8/8.
+  workflow 4/4, docs 8/8, Task 20 gates 21/21, and frontend 8/8.
 - Frontend lint, typecheck, and Vite production build: passed.
 - Rust pinned fmt, locked check, all-target clippy with warnings denied, and
   workspace tests: passed. Fixture-dependent ignored Cargo tests were executed
@@ -191,3 +191,25 @@ were fixed with new failing tests first:
 The manifest omits checkout paths and timestamps. It is regenerated only from
 a freshly built Release app using the documented `--write-manifest` command;
 identical live evidence must serialize byte-for-byte identically.
+
+## Final gate follow-up
+
+The final P2 review found that numeric validity alone did not make the symbol
+count object a closed schema: an extra key was accepted, while a missing key
+was rejected only incidentally during later arithmetic. A failing contract test
+first recorded the obsolete `undefinedObservations` / `globalObservations`
+names, followed by adversarial RED cases for missing and extra fields.
+
+Every per-binary `symbolCounts` object and the aggregate `symbolTotals` object
+now has exactly `undefinedTotal`, `undefinedUnique`, `globalTotal`, and
+`globalUnique`. Every value must be a nonnegative JavaScript safe integer;
+unique cannot exceed total; and aggregate totals must equal the sum of the
+three per-binary totals. Aggregate unique values retain their actual cross-file
+union meaning (433 undefined and 3,268 global), so they are deliberately not
+the sum of the three per-binary unique counts. The report table labels that
+scope and remains cell-for-cell bound to the manifest.
+
+The new mutation suite synchronizes the corresponding report row before it
+tests deletion of each key, an extra key, `-1`, `NaN`, a fractional value, an
+unsafe integer, unique greater than total, and aggregate-total drift. All are
+rejected by the manifest contract before report prose can legitimize them.

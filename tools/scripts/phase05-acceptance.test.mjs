@@ -14,6 +14,169 @@ async function repositoryAcceptance() {
   return validatePhase05Acceptance(await loadPhase05Acceptance(repositoryRoot));
 }
 
+const exactSymbolCountKeys = [
+  "globalTotal",
+  "globalUnique",
+  "undefinedTotal",
+  "undefinedUnique",
+];
+
+function synchronizeFirstBinaryCounts(markdown, counts) {
+  const prefix =
+    "| target/release/bundle/macos/AI Voice Studio.app/Contents/MacOS/ai-voice-studio | arm64 | 13 |";
+  const original = markdown.split(/\r?\n/u).find((line) => line.startsWith(prefix));
+  assert.ok(original, "fixture must contain the desktop symbol row");
+  const replacement = `${prefix} ${String(counts.undefinedTotal)} | ${String(counts.undefinedUnique)} | ${String(counts.globalTotal)} | ${String(counts.globalUnique)} | lipo -archs; otool -L; nm -u; nm -g — completed |`;
+  return markdown.replace(original, replacement);
+}
+
+function synchronizeAggregateCounts(markdown, counts) {
+  const prefix = "| All three Mach-O files (cross-file union for unique) |";
+  const original = markdown.split(/\r?\n/u).find((line) => line.startsWith(prefix));
+  assert.ok(original, "fixture must contain the aggregate symbol row");
+  return markdown.replace(
+    original,
+    `${prefix} ${String(counts.undefinedTotal)} | ${String(counts.undefinedUnique)} | ${String(counts.globalTotal)} | ${String(counts.globalUnique)} |`,
+  );
+}
+
+test("generated acceptance evidence uses the exact public symbol count schema", async () => {
+  const { manifest } = await loadPhase05Acceptance(repositoryRoot);
+  for (const binary of manifest.binaries) {
+    assert.deepEqual(Object.keys(binary.symbolCounts).sort(), exactSymbolCountKeys);
+  }
+  assert.deepEqual(Object.keys(manifest.symbolTotals).sort(), exactSymbolCountKeys);
+});
+
+test("acceptance gate rejects missing or extra symbol count fields even when report rows match", async () => {
+  const input = await loadPhase05Acceptance(repositoryRoot);
+  for (const key of exactSymbolCountKeys) {
+    const binaryManifest = structuredClone(input.manifest);
+    delete binaryManifest.binaries[0].symbolCounts[key];
+    assert.throws(
+      () =>
+        validatePhase05Acceptance({
+          ...input,
+          manifest: binaryManifest,
+          markdown: synchronizeFirstBinaryCounts(
+            input.markdown,
+            binaryManifest.binaries[0].symbolCounts,
+          ),
+        }),
+      /exact symbol count keys/u,
+    );
+
+    const aggregateManifest = structuredClone(input.manifest);
+    delete aggregateManifest.symbolTotals[key];
+    assert.throws(
+      () =>
+        validatePhase05Acceptance({
+          ...input,
+          manifest: aggregateManifest,
+          markdown: synchronizeAggregateCounts(input.markdown, aggregateManifest.symbolTotals),
+        }),
+      /exact aggregate symbol count keys/u,
+    );
+  }
+
+  for (const location of ["binary", "aggregate"]) {
+    const manifest = structuredClone(input.manifest);
+    const counts =
+      location === "binary" ? manifest.binaries[0].symbolCounts : manifest.symbolTotals;
+    counts.unexpected = 0;
+    assert.throws(
+      () =>
+        validatePhase05Acceptance({
+          ...input,
+          manifest,
+          markdown:
+            location === "binary"
+              ? synchronizeFirstBinaryCounts(input.markdown, counts)
+              : synchronizeAggregateCounts(input.markdown, counts),
+        }),
+      location === "binary"
+        ? /exact symbol count keys/u
+        : /exact aggregate symbol count keys/u,
+    );
+  }
+});
+
+test("acceptance gate rejects unsafe symbol counts before trusting synchronized report text", async () => {
+  const input = await loadPhase05Acceptance(repositoryRoot);
+  for (const invalid of [-1, Number.NaN, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const binaryManifest = structuredClone(input.manifest);
+    binaryManifest.binaries[0].symbolCounts.undefinedTotal = invalid;
+    assert.throws(
+      () =>
+        validatePhase05Acceptance({
+          ...input,
+          manifest: binaryManifest,
+          markdown: synchronizeFirstBinaryCounts(
+            input.markdown,
+            binaryManifest.binaries[0].symbolCounts,
+          ),
+        }),
+      /nonnegative safe integer/u,
+    );
+
+    const aggregateManifest = structuredClone(input.manifest);
+    aggregateManifest.symbolTotals.globalTotal = invalid;
+    assert.throws(
+      () =>
+        validatePhase05Acceptance({
+          ...input,
+          manifest: aggregateManifest,
+          markdown: synchronizeAggregateCounts(input.markdown, aggregateManifest.symbolTotals),
+        }),
+      /nonnegative safe integer/u,
+    );
+  }
+});
+
+test("acceptance gate rejects impossible unique counts and aggregate total drift", async () => {
+  const input = await loadPhase05Acceptance(repositoryRoot);
+
+  const impossibleBinary = structuredClone(input.manifest);
+  impossibleBinary.binaries[0].symbolCounts.undefinedUnique =
+    impossibleBinary.binaries[0].symbolCounts.undefinedTotal + 1;
+  assert.throws(
+    () =>
+      validatePhase05Acceptance({
+        ...input,
+        manifest: impossibleBinary,
+        markdown: synchronizeFirstBinaryCounts(
+          input.markdown,
+          impossibleBinary.binaries[0].symbolCounts,
+        ),
+      }),
+    /unique symbol count exceeds total/u,
+  );
+
+  const impossibleAggregate = structuredClone(input.manifest);
+  impossibleAggregate.symbolTotals.globalUnique = impossibleAggregate.symbolTotals.globalTotal + 1;
+  assert.throws(
+    () =>
+      validatePhase05Acceptance({
+        ...input,
+        manifest: impossibleAggregate,
+        markdown: synchronizeAggregateCounts(input.markdown, impossibleAggregate.symbolTotals),
+      }),
+    /aggregate unique symbol count exceeds total/u,
+  );
+
+  const driftedAggregate = structuredClone(input.manifest);
+  driftedAggregate.symbolTotals.undefinedTotal += 1;
+  assert.throws(
+    () =>
+      validatePhase05Acceptance({
+        ...input,
+        manifest: driftedAggregate,
+        markdown: synchronizeAggregateCounts(input.markdown, driftedAggregate.symbolTotals),
+      }),
+    /aggregate symbol totals do not equal the binary sums/u,
+  );
+});
+
 test("checked-in acceptance remains pending only on an unrun real Windows job", async () => {
   const result = await repositoryAcceptance();
   assert.equal(result.status, "PENDING");

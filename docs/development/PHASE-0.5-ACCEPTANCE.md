@@ -170,7 +170,7 @@ generation timestamp, so identical evidence serializes identically.
 
 | Scope | Undefined observations | Undefined unique | Global observations | Global unique |
 | --- | --- | --- | --- | --- |
-| All three Mach-O files | 457 | 433 | 3294 | 3268 |
+| All three Mach-O files (cross-file union for unique) | 457 | 433 | 3294 | 3268 |
 
 ## Release bundle artifacts
 

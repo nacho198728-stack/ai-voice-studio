@@ -277,9 +277,9 @@ export function buildPhase05AcceptanceManifest(evidence, versions) {
       architectures: binary.architectures,
       dependencies: binary.dependencies,
       symbolCounts: {
-        undefinedObservations: binary.undefinedSymbols.length,
+        undefinedTotal: binary.undefinedSymbols.length,
         undefinedUnique: new Set(binary.undefinedSymbols).size,
-        globalObservations: binary.globalSymbols.length,
+        globalTotal: binary.globalSymbols.length,
         globalUnique: new Set(binary.globalSymbols).size,
       },
       inspections: {
@@ -290,9 +290,9 @@ export function buildPhase05AcceptanceManifest(evidence, versions) {
       },
     })),
     symbolTotals: {
-      undefinedObservations: undefinedSymbols.observations,
+      undefinedTotal: undefinedSymbols.observations,
       undefinedUnique: undefinedSymbols.unique,
-      globalObservations: globalSymbols.observations,
+      globalTotal: globalSymbols.observations,
       globalUnique: globalSymbols.unique,
     },
     versions,

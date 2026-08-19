@@ -39,6 +39,12 @@ const inspectionKeys = [
   "undefinedSymbols",
   "globalSymbols",
 ];
+const symbolCountKeys = [
+  "globalTotal",
+  "globalUnique",
+  "undefinedTotal",
+  "undefinedUnique",
+];
 const expectedInspections = {
   architectures: { tool: "/usr/bin/lipo", arguments: ["-archs"] },
   dependencies: { tool: "/usr/bin/otool", arguments: ["-L"] },
@@ -71,6 +77,34 @@ function assertUncheckedPlanTask(planMarkdown, marker, task) {
 
 function same(left, right) {
   return isDeepStrictEqual(left, right);
+}
+
+function assertSymbolCounts(counts, { label, aggregate = false }) {
+  const keys = counts && typeof counts === "object" ? Object.keys(counts).sort() : [];
+  if (!same(keys, symbolCountKeys)) {
+    throw new Error(
+      aggregate
+        ? "acceptance manifest requires exact aggregate symbol count keys"
+        : `acceptance manifest requires exact symbol count keys: ${label}`,
+    );
+  }
+  for (const key of symbolCountKeys) {
+    if (!Number.isSafeInteger(counts[key]) || counts[key] < 0) {
+      throw new Error(
+        `acceptance manifest symbol count must be a nonnegative safe integer: ${label}.${key}`,
+      );
+    }
+  }
+  if (
+    counts.undefinedUnique > counts.undefinedTotal ||
+    counts.globalUnique > counts.globalTotal
+  ) {
+    throw new Error(
+      aggregate
+        ? "acceptance manifest aggregate unique symbol count exceeds total"
+        : `acceptance manifest unique symbol count exceeds total: ${label}`,
+    );
+  }
 }
 
 function assertManifestVersions(manifest, declaredVersions) {
@@ -161,35 +195,22 @@ function assertManifestShape(manifest, declaredVersions) {
         );
       }
     }
-    for (const count of Object.values(binary.symbolCounts ?? {})) {
-      if (!Number.isSafeInteger(count) || count < 0) {
-        throw new Error(`acceptance manifest symbol count is invalid: ${binary.relativePath}`);
-      }
-    }
-    if (
-      binary.symbolCounts?.undefinedUnique > binary.symbolCounts?.undefinedObservations ||
-      binary.symbolCounts?.globalUnique > binary.symbolCounts?.globalObservations
-    ) {
-      throw new Error(`acceptance manifest unique symbol count is invalid: ${binary.relativePath}`);
-    }
+    assertSymbolCounts(binary.symbolCounts, { label: binary.relativePath });
   }
+  assertSymbolCounts(manifest.symbolTotals, { label: "symbolTotals", aggregate: true });
   const summedUndefined = binaries.reduce(
-    (total, binary) => total + binary.symbolCounts.undefinedObservations,
+    (total, binary) => total + binary.symbolCounts.undefinedTotal,
     0,
   );
   const summedGlobal = binaries.reduce(
-    (total, binary) => total + binary.symbolCounts.globalObservations,
+    (total, binary) => total + binary.symbolCounts.globalTotal,
     0,
   );
   if (
-    manifest.symbolTotals?.undefinedObservations !== summedUndefined ||
-    manifest.symbolTotals?.globalObservations !== summedGlobal ||
-    !Number.isSafeInteger(manifest.symbolTotals?.undefinedUnique) ||
-    !Number.isSafeInteger(manifest.symbolTotals?.globalUnique) ||
-    manifest.symbolTotals.undefinedUnique > summedUndefined ||
-    manifest.symbolTotals.globalUnique > summedGlobal
+    manifest.symbolTotals.undefinedTotal !== summedUndefined ||
+    manifest.symbolTotals.globalTotal !== summedGlobal
   ) {
-    throw new Error("acceptance manifest aggregate symbol counts are invalid");
+    throw new Error("acceptance manifest aggregate symbol totals do not equal the binary sums");
   }
   if (
     !same(manifest.exclusions, {
@@ -239,9 +260,9 @@ function reportBinaryRows(manifest) {
     `${manifest.bundlePath}/${binary.relativePath}`,
     binary.architectures.join(","),
     String(binary.dependencies.length),
-    String(binary.symbolCounts.undefinedObservations),
+    String(binary.symbolCounts.undefinedTotal),
     String(binary.symbolCounts.undefinedUnique),
-    String(binary.symbolCounts.globalObservations),
+    String(binary.symbolCounts.globalTotal),
     String(binary.symbolCounts.globalUnique),
     reportInspectionProvenance(binary),
   ]);
@@ -362,10 +383,10 @@ export function validatePhase05Acceptance({
   if (
     !same(tableAfterHeading(markdown, "## Symbol observation totals"), [
       [
-        "All three Mach-O files",
-        String(totals.undefinedObservations),
+        "All three Mach-O files (cross-file union for unique)",
+        String(totals.undefinedTotal),
         String(totals.undefinedUnique),
-        String(totals.globalObservations),
+        String(totals.globalTotal),
         String(totals.globalUnique),
       ],
     ])

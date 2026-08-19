@@ -254,9 +254,9 @@ test("builds a deterministic manifest without paths, timestamps, or raw symbols"
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.artifacts.length, 6);
   assert.deepEqual(manifest.symbolTotals, {
-    undefinedObservations: 3,
+    undefinedTotal: 3,
     undefinedUnique: 2,
-    globalObservations: 0,
+    globalTotal: 0,
     globalUnique: 0,
   });
   assert.deepEqual(manifest.binaries[0].inspections.dependencies, {
