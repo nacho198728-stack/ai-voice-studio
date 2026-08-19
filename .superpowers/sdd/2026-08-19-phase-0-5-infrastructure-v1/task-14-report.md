@@ -20,8 +20,8 @@ and negative fixtures; real Windows execution remains Task 18.
 | Self-contained public header in strict C17 and C++20 | `voice_engine_c_abi_c_test.c` and `voice_engine_c_abi_cpp_test.cpp` include `voice_engine.h` first, assert the active language standard, and build with extensions disabled. The two external-consumer targets use `-Wall -Wextra -Wpedantic -Werror` on Clang/GCC or `/W4 /WX` on MSVC; C++ also uses `/permissive- /Zc:__cplusplus`. |
 | ABI/current/minimum versions and fixed-width values | The C contract pins v1/current/minimum to 1, all ABI boolean/PCM/reset values and widths, and all 12 generated canonical error values. `aivs_contract_mapping_test` independently checks generated C++ mappings. |
 | Every public v1 structure | `voice_engine_abi_v1_layout.h`, compiled by both languages, pins 19 structure sizes, 8-byte alignments, every field offset, every two-entry reserved array, and the API table's four-entry reserve on a 64-bit pointer ABI. |
-| Initialization macros | `voice_engine_abi_v1_initializers.h`, executed by both consumers in Debug and Release, pins all 13 published initializer macros, including nested prefix/version state, defaults, NULL pointers, zero counts, and reserves. |
-| Eight operations and factory signatures | C `_Generic` assertions and C++ `std::is_same` assertions pin the factory and all eight function-pointer typedef/member signatures, including `AIVS_VOICE_ENGINE_CALL`. The table layout manifest pins all eight slots. |
+| Initialization macros | `voice_engine_abi_v1_initializers.h`, executed by both consumers in Debug and Release, pins all 13 published initializer macros. Test-owned literal helpers recursively check every field of nested byte views, both nested mutable byte buffers, and the nested mutable PCM output, in addition to every top-level default and reserve. |
+| Eight operations and factory signatures | The factory declaration and public typedef are independently compared with a test-owned prototype that spells the return and all three parameter types; its Windows branch directly spells `__cdecl` without reusing the public calling-convention macro. C `_Generic` and C++ `std::is_same` perform the comparisons without odr-using the export. The eight operation signatures remain independently constrained by explicit C stubs, strict diagnostics, and their table-slot type assertions. |
 | Table completeness and negotiation | Header helper tests cover invalid/no-overlap/highest-overlap selection, exact/short/large capacity, bounded clearing, full-table completeness, wrong version, reserve, and missing-slot rejection. The dynamic Mock matrix additionally proves a future host range `[1,2]` selects and returns a complete v1 table. |
 | Failure atomicity and caller-owned buffers | The C helper test pins output clearing canaries, pointer/count rules, checked PCM byte/range arithmetic, exact/disjoint/overlap rules, capacity, generation exhaustion, and bounded process-result normalization. The real Mock dynamic and matrix tests cover info/process/prepare/reset/metrics failure normalization without modifying caller PCM or metadata. |
 | Exactly one Mock plugin export | macOS/Linux inspect the actual shared library with `nm`. MSVC now registers the same CTest name using `dumpbin /NOLOGO /EXPORTS`; fixture tests prove the parser accepts only `aivs_voice_engine_get_api` and rejects an additional export. |
@@ -88,6 +88,7 @@ new audio semantics, or speculative ABI surface was added.
 ## Commit
 
 - `dd12752` — `test(runtime): close VoiceEngine ABI contract gate`
+- `92f4ee5` — `test(runtime): make ABI expectations independent`
 
 ## Limitations
 
@@ -98,3 +99,31 @@ new audio semantics, or speculative ABI surface was added.
   produced Windows DLL.
 - The contract gate does not introduce Audio Engine/device/JUCE/ONNX/AI/Python,
   UI, cloud, packaging, or model semantics.
+
+## Review fix round 1
+
+- Closed the self-referential factory-signature gap. Each language consumer now
+  owns an expected function-pointer type with the literal
+  `(const aivs_voice_engine_factory_request_t*, aivs_voice_engine_api_t*,
+  uint32_t) -> aivs_error_code_t` prototype. Windows writes `__cdecl` directly;
+  other platforms use their default convention. Both the exported declaration
+  and `aivs_voice_engine_get_api_fn` must equal this independent type. The checks
+  are unevaluated (`_Generic` / `decltype`), so the header-only contract
+  executables do not acquire an unresolved factory reference.
+- Closed the three composite-initializer gaps. Test-owned field helpers check
+  all byte-view, mutable-byte-buffer, and mutable-PCM-buffer fields against
+  literal zero/NULL/default expectations. They run against both standalone and
+  nested expansions, so `AIVS_INITIALIZE_REQUEST_INIT.configuration_utf8`, both
+  `AIVS_ENGINE_INFO_INIT` buffers, and
+  `AIVS_PROCESS_AUDIO_RESULT_INIT.output` are recursively frozen, including
+  nested versions, pointers, capacities/counts, PCM metadata, and reserves.
+  Existing explicit checks retain every composite top-level reserve.
+- These changes strengthen tests around the already-correct frozen ABI. The new
+  assertions passed immediately; no production defect or false implementation
+  RED is claimed. `runtime/api/voice_engine.h`, canonical JSON, ADR-002, and the
+  main plan were unchanged, and ADR-003 remains absent.
+- Fresh review-fix verification passed: focused Debug and Release ABI tests
+  2/2; full Debug and Release CTest 21/21 each; canonical generator tests 6/6;
+  root pnpm tests; and Cargo fmt, locked workspace check, clippy with warnings
+  denied, and locked workspace tests. Windows execution remains deferred to
+  Task 18 and is not claimed.
