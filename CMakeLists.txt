@@ -1,8 +1,21 @@
 cmake_minimum_required(VERSION 3.25)
 
+set(AIVS_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+if(NOT EXISTS "${AIVS_VERSION_FILE}")
+  message(FATAL_ERROR "Repository version file is missing: ${AIVS_VERSION_FILE}")
+endif()
+
+file(READ "${AIVS_VERSION_FILE}" AIVS_PROJECT_VERSION)
+string(STRIP "${AIVS_PROJECT_VERSION}" AIVS_PROJECT_VERSION)
+if(NOT AIVS_PROJECT_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR
+    "VERSION must contain a major.minor.patch version; got '${AIVS_PROJECT_VERSION}'"
+  )
+endif()
+
 project(
   AIVoiceStudio
-  VERSION 0.5.0
+  VERSION ${AIVS_PROJECT_VERSION}
   LANGUAGES C CXX
 )
 
