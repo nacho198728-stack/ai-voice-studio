@@ -1,0 +1,18 @@
+Dump of file aivs_mock_voice_engine.dll
+
+File Type: DLL
+
+  Section contains the following exports for aivs_mock_voice_engine.dll
+
+    00000000 characteristics
+    FFFFFFFF time date stamp
+        0.00 version
+           1 ordinal base
+           1 number of functions
+           1 number of names
+
+    ordinal hint RVA      name
+
+          1    0 00011000 aivs_voice_engine_get_api
+
+  Summary

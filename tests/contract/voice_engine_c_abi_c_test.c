@@ -1,9 +1,20 @@
+#include <voice_engine.h>
+
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include <assert.h>
 #include <float.h>
 #include <stdint.h>
 #include <string.h>
 
+#include "voice_engine_abi_v1_initializers.h"
 #include "voice_engine_abi_v1_layout.h"
+
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201710L
+#error "VoiceEngine C consumer contract requires C17 or newer"
+#endif
 
 static aivs_error_code_t stub_initialize(
     const aivs_initialize_request_t* request, aivs_initialize_result_t* result) {
@@ -74,6 +85,10 @@ static aivs_error_code_t stub_metrics(
 
 _Static_assert(sizeof(float) == 4U, "PCM must use four-byte float storage");
 _Static_assert(sizeof(aivs_error_code_t) == 4U, "error code width must remain canonical");
+_Static_assert(sizeof(aivs_bool_t) == 4U, "ABI boolean width drifted");
+_Static_assert(sizeof(aivs_pcm_format_t) == 4U, "PCM format width drifted");
+_Static_assert(sizeof(aivs_pcm_layout_t) == 4U, "PCM layout width drifted");
+_Static_assert(sizeof(aivs_reset_reason_t) == 4U, "reset reason width drifted");
 _Static_assert(
     AIVS_VOICE_ENGINE_ABI_V1_VERSION == 1U,
     "the frozen v1 ABI constant must not follow mutable current"
@@ -121,11 +136,20 @@ int main(void) {
   float samples[8] = {0.0F};
   float before_samples[8];
 
+  assert_voice_engine_abi_v1_initializers();
+
+  assert(AIVS_VOICE_ENGINE_ABI_V1_VERSION == 1U);
+  assert(AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION == 1U);
+  assert(AIVS_VOICE_ENGINE_ABI_MINIMUM_COMPATIBLE_VERSION == 1U);
+
   assert(!aivs_voice_engine_api_v1_capacity_is_sufficient(AIVS_VOICE_ENGINE_API_V1_SIZE - 1U));
   assert(aivs_voice_engine_api_v1_capacity_is_sufficient(AIVS_VOICE_ENGINE_API_V1_SIZE));
   assert(aivs_voice_engine_api_v1_capacity_is_sufficient(AIVS_VOICE_ENGINE_API_V1_SIZE + 64U));
   assert(aivs_voice_engine_select_abi_version(1U, 1U, 2U, 2U, &selected) == AIVS_ERROR_UNSUPPORTED_VOICE_ENGINE_ABI);
   assert(selected == 0U);
+  assert(aivs_voice_engine_select_abi_version(1U, 1U, 1U, 1U, NULL) == AIVS_ERROR_INVALID_ARGUMENT);
+  assert(aivs_voice_engine_select_abi_version(0U, 1U, 1U, 1U, &selected) == AIVS_ERROR_INVALID_ARGUMENT);
+  assert(aivs_voice_engine_select_abi_version(1U, 1U, 2U, 1U, &selected) == AIVS_ERROR_INVALID_ARGUMENT);
   assert(aivs_voice_engine_select_abi_version(1U, 4U, 2U, 3U, &selected) == AIVS_ERROR_SUCCESS);
   assert(selected == 3U);
   future_host.maximum_abi_version = 2U;
@@ -137,8 +161,11 @@ int main(void) {
   assert(selected == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
   assert(aivs_voice_engine_pcm_byte_count_is_addressable(0U, 1U, &bytes));
   assert(bytes == 0U);
+  assert(!aivs_voice_engine_pcm_byte_count_is_addressable(1U, 1U, NULL));
+  assert(!aivs_voice_engine_pcm_byte_count_is_addressable(1U, 0U, &bytes));
   assert(aivs_voice_engine_generation_advance(0U, &bytes) == AIVS_ERROR_SUCCESS);
   assert(bytes == 1U);
+  assert(aivs_voice_engine_generation_advance(0U, NULL) == AIVS_ERROR_INVALID_ARGUMENT);
   assert(aivs_voice_engine_generation_advance(UINT64_MAX, &bytes) == AIVS_ERROR_INVALID_STATE);
 
   aivs_voice_engine_clear_factory_output(NULL, 0U);
@@ -163,6 +190,7 @@ int main(void) {
   assert(!aivs_voice_engine_pcm_numeric_ranges_are_compatible(
       UINTPTR_MAX - 2U, (uintptr_t)samples, 4U));
   assert(!aivs_voice_engine_frame_capacity_is_sufficient(2U, 1U));
+  assert(aivs_voice_engine_frame_capacity_is_sufficient(2U, 2U));
   assert(aivs_voice_engine_pcm_byte_count_is_addressable(UINT64_MAX / 4U, 1U, &bytes));
   assert(bytes == UINT64_MAX - 3U);
   assert(!aivs_voice_engine_pcm_byte_count_is_addressable(UINT64_MAX, 2U, &bytes));
@@ -217,11 +245,26 @@ int main(void) {
       &result, sizeof(result), 8U, AIVS_ERROR_INVALID_ARGUMENT, 7U);
   assert(result.output.frames_written_or_required == UINT64_C(0xA5A5A5A5A5A5A5A5));
 
+  assert(AIVS_FALSE == 0U);
+  assert(AIVS_TRUE == 1U);
+  assert(AIVS_PCM_FORMAT_FLOAT32 == 1U);
+  assert(AIVS_PCM_LAYOUT_INTERLEAVED == 1U);
+  assert(AIVS_RESET_REASON_CALLER_REQUEST == 1U);
+  assert(AIVS_RESET_REASON_DISCONTINUITY == 2U);
+  assert(AIVS_RESET_REASON_RECOVERY == 3U);
+
   assert(AIVS_ERROR_SUCCESS == 0);
+  assert(AIVS_ERROR_UNSUPPORTED_PROTOCOL_VERSION == 1000);
   assert(AIVS_ERROR_UNSUPPORTED_VOICE_ENGINE_ABI == 1001);
+  assert(AIVS_ERROR_MALFORMED_FRAME == 1100);
+  assert(AIVS_ERROR_FRAME_TOO_LARGE == 1101);
+  assert(AIVS_ERROR_RUNTIME_UNAVAILABLE == 1200);
+  assert(AIVS_ERROR_RUNTIME_SHUTTING_DOWN == 1201);
+  assert(AIVS_ERROR_ENGINE_UNAVAILABLE == 1300);
   assert(AIVS_ERROR_INVALID_ARGUMENT == 1301);
   assert(AIVS_ERROR_INVALID_STATE == 1302);
   assert(AIVS_ERROR_BUFFER_TOO_SMALL == 1303);
+  assert(AIVS_ERROR_INTERNAL_ERROR == 1900);
 
   return 0;
 }

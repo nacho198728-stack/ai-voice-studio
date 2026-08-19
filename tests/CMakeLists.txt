@@ -14,11 +14,33 @@ add_test(NAME aivs_runtime_message_cpp_test COMMAND aivs_runtime_message_cpp_tes
 
 add_executable(aivs_voice_engine_c_abi_c_test contract/voice_engine_c_abi_c_test.c)
 target_link_libraries(aivs_voice_engine_c_abi_c_test PRIVATE ai_voice::voice_engine_abi)
+set_target_properties(
+  aivs_voice_engine_c_abi_c_test
+  PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED YES C_EXTENSIONS NO
+)
 add_test(NAME aivs_voice_engine_c_abi_c_test COMMAND aivs_voice_engine_c_abi_c_test)
 
 add_executable(aivs_voice_engine_c_abi_cpp_test contract/voice_engine_c_abi_cpp_test.cpp)
 target_link_libraries(aivs_voice_engine_c_abi_cpp_test PRIVATE ai_voice::voice_engine_abi)
+set_target_properties(
+  aivs_voice_engine_c_abi_cpp_test
+  PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO
+)
 add_test(NAME aivs_voice_engine_c_abi_cpp_test COMMAND aivs_voice_engine_c_abi_cpp_test)
+
+foreach(target IN ITEMS aivs_voice_engine_c_abi_c_test aivs_voice_engine_c_abi_cpp_test)
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /W4 /WX)
+  else()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  endif()
+endforeach()
+if(MSVC)
+  target_compile_options(
+    aivs_voice_engine_c_abi_cpp_test
+    PRIVATE /permissive- /Zc:__cplusplus
+  )
+endif()
 
 add_executable(aivs_mock_voice_engine_dynamic_test runtime/mock_voice_engine_dynamic_test.cpp)
 target_link_libraries(aivs_mock_voice_engine_dynamic_test PRIVATE ai_voice::voice_engine_abi)
@@ -59,6 +81,42 @@ if(UNIX)
       -P ${CMAKE_CURRENT_SOURCE_DIR}/runtime/mock_voice_engine_exports.cmake
   )
 endif()
+if(MSVC)
+  set(AIVS_MOCK_EXPORT_INSPECTOR "${CMAKE_DUMPBIN}")
+  if(NOT AIVS_MOCK_EXPORT_INSPECTOR)
+    find_program(AIVS_MOCK_EXPORT_INSPECTOR NAMES dumpbin REQUIRED)
+  endif()
+  add_test(
+    NAME aivs_mock_voice_engine_exports
+    COMMAND
+      ${CMAKE_COMMAND}
+      "-DINSPECTOR=${AIVS_MOCK_EXPORT_INSPECTOR}"
+      "-DLIBRARY=$<TARGET_FILE:aivs_mock_voice_engine>"
+      -DMSVC_PLATFORM=TRUE
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/runtime/mock_voice_engine_exports.cmake
+  )
+endif()
+
+add_test(
+  NAME aivs_mock_voice_engine_msvc_export_parser_accepts_factory
+  COMMAND
+    ${CMAKE_COMMAND}
+    -DMSVC_PLATFORM=TRUE
+    -DOUTPUT_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/msvc-exports-factory-only.txt
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/runtime/mock_voice_engine_exports.cmake
+)
+add_test(
+  NAME aivs_mock_voice_engine_msvc_export_parser_rejects_extra
+  COMMAND
+    ${CMAKE_COMMAND}
+    -DMSVC_PLATFORM=TRUE
+    -DOUTPUT_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/msvc-exports-extra-symbol.txt
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/runtime/mock_voice_engine_exports.cmake
+)
+set_tests_properties(
+  aivs_mock_voice_engine_msvc_export_parser_rejects_extra
+  PROPERTIES WILL_FAIL TRUE
+)
 
 add_executable(aivs_voice_engine_loader_test runtime/voice_engine_loader_test.cpp)
 find_package(Threads REQUIRED)

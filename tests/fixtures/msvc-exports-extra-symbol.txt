@@ -1,0 +1,12 @@
+Dump of file aivs_mock_voice_engine.dll
+
+File Type: DLL
+
+  Section contains the following exports for aivs_mock_voice_engine.dll
+
+    ordinal hint RVA      name
+
+          1    0 00011000 aivs_voice_engine_get_api
+          2    1 00012000 forbidden_engine_export
+
+  Summary

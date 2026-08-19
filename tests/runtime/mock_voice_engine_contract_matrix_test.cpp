@@ -205,6 +205,13 @@ void factory_failure_matrix_is_bounded_and_negotiates_v1(aivs_voice_engine_get_a
   const auto api = complete_api(factory);
   assert(api.struct_size == AIVS_VOICE_ENGINE_API_V1_SIZE);
   assert(api.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
+
+  auto future_compatible = valid;
+  future_compatible.maximum_abi_version = AIVS_VOICE_ENGINE_ABI_V1_VERSION + 1U;
+  auto negotiated = aivs_voice_engine_api_t AIVS_VOICE_ENGINE_API_OUTPUT_INIT;
+  assert(factory(&future_compatible, &negotiated, sizeof(negotiated)) == AIVS_ERROR_SUCCESS);
+  assert(negotiated.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
+  assert(aivs_voice_engine_api_v1_is_complete(&negotiated) == AIVS_TRUE);
 }
 
 void initialize_and_shutdown_validate_prefix_version_reserved_and_retry(

@@ -19,6 +19,10 @@
 #define AIVS_LAYOUT_TYPE(type, expected_size) \
   AIVS_LAYOUT_ASSERT(sizeof(type) == (expected_size), #type " size drifted"); \
   AIVS_LAYOUT_ASSERT(AIVS_LAYOUT_ALIGNOF(type) == 8U, #type " alignment drifted")
+#define AIVS_LAYOUT_RESERVED(type, expected_count) \
+  AIVS_LAYOUT_ASSERT( \
+      sizeof(((type*)0)->reserved) / sizeof(((type*)0)->reserved[0]) == (expected_count), \
+      #type ".reserved shape drifted")
 
 AIVS_LAYOUT_ASSERT(UINTPTR_MAX == UINT64_MAX, "v1 layout manifest requires a 64-bit pointer ABI");
 
@@ -28,6 +32,7 @@ AIVS_LAYOUT_FIELD(aivs_bytes_view_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_bytes_view_t, data, 8U);
 AIVS_LAYOUT_FIELD(aivs_bytes_view_t, size_bytes, 16U);
 AIVS_LAYOUT_FIELD(aivs_bytes_view_t, reserved, 24U);
+AIVS_LAYOUT_RESERVED(aivs_bytes_view_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_mutable_bytes_buffer_t, 48U);
 AIVS_LAYOUT_FIELD(aivs_mutable_bytes_buffer_t, struct_size, 0U);
@@ -36,6 +41,7 @@ AIVS_LAYOUT_FIELD(aivs_mutable_bytes_buffer_t, data, 8U);
 AIVS_LAYOUT_FIELD(aivs_mutable_bytes_buffer_t, capacity_bytes, 16U);
 AIVS_LAYOUT_FIELD(aivs_mutable_bytes_buffer_t, written_or_required_bytes, 24U);
 AIVS_LAYOUT_FIELD(aivs_mutable_bytes_buffer_t, reserved, 32U);
+AIVS_LAYOUT_RESERVED(aivs_mutable_bytes_buffer_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_pcm_buffer_t, 72U);
 AIVS_LAYOUT_FIELD(aivs_pcm_buffer_t, struct_size, 0U);
@@ -49,6 +55,7 @@ AIVS_LAYOUT_FIELD(aivs_pcm_buffer_t, frame_count, 32U);
 AIVS_LAYOUT_FIELD(aivs_pcm_buffer_t, sequence, 40U);
 AIVS_LAYOUT_FIELD(aivs_pcm_buffer_t, sample_time, 48U);
 AIVS_LAYOUT_FIELD(aivs_pcm_buffer_t, reserved, 56U);
+AIVS_LAYOUT_RESERVED(aivs_pcm_buffer_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_pcm_mutable_buffer_t, 80U);
 AIVS_LAYOUT_FIELD(aivs_pcm_mutable_buffer_t, struct_size, 0U);
@@ -63,6 +70,7 @@ AIVS_LAYOUT_FIELD(aivs_pcm_mutable_buffer_t, frames_written_or_required, 40U);
 AIVS_LAYOUT_FIELD(aivs_pcm_mutable_buffer_t, sequence, 48U);
 AIVS_LAYOUT_FIELD(aivs_pcm_mutable_buffer_t, sample_time, 56U);
 AIVS_LAYOUT_FIELD(aivs_pcm_mutable_buffer_t, reserved, 64U);
+AIVS_LAYOUT_RESERVED(aivs_pcm_mutable_buffer_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_voice_engine_factory_request_t, 32U);
 AIVS_LAYOUT_FIELD(aivs_voice_engine_factory_request_t, struct_size, 0U);
@@ -70,18 +78,21 @@ AIVS_LAYOUT_FIELD(aivs_voice_engine_factory_request_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_voice_engine_factory_request_t, minimum_abi_version, 8U);
 AIVS_LAYOUT_FIELD(aivs_voice_engine_factory_request_t, maximum_abi_version, 12U);
 AIVS_LAYOUT_FIELD(aivs_voice_engine_factory_request_t, reserved, 16U);
+AIVS_LAYOUT_RESERVED(aivs_voice_engine_factory_request_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_initialize_request_t, 64U);
 AIVS_LAYOUT_FIELD(aivs_initialize_request_t, struct_size, 0U);
 AIVS_LAYOUT_FIELD(aivs_initialize_request_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_initialize_request_t, configuration_utf8, 8U);
 AIVS_LAYOUT_FIELD(aivs_initialize_request_t, reserved, 48U);
+AIVS_LAYOUT_RESERVED(aivs_initialize_request_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_initialize_result_t, 32U);
 AIVS_LAYOUT_FIELD(aivs_initialize_result_t, struct_size, 0U);
 AIVS_LAYOUT_FIELD(aivs_initialize_result_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_initialize_result_t, engine, 8U);
 AIVS_LAYOUT_FIELD(aivs_initialize_result_t, reserved, 16U);
+AIVS_LAYOUT_RESERVED(aivs_initialize_result_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_engine_info_t, 120U);
 AIVS_LAYOUT_FIELD(aivs_engine_info_t, struct_size, 0U);
@@ -89,6 +100,7 @@ AIVS_LAYOUT_FIELD(aivs_engine_info_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_engine_info_t, engine_name_utf8, 8U);
 AIVS_LAYOUT_FIELD(aivs_engine_info_t, engine_version_utf8, 56U);
 AIVS_LAYOUT_FIELD(aivs_engine_info_t, reserved, 104U);
+AIVS_LAYOUT_RESERVED(aivs_engine_info_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_load_model_request_t, 104U);
 AIVS_LAYOUT_FIELD(aivs_load_model_request_t, struct_size, 0U);
@@ -96,6 +108,7 @@ AIVS_LAYOUT_FIELD(aivs_load_model_request_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_load_model_request_t, model_id_utf8, 8U);
 AIVS_LAYOUT_FIELD(aivs_load_model_request_t, model_data, 48U);
 AIVS_LAYOUT_FIELD(aivs_load_model_request_t, reserved, 88U);
+AIVS_LAYOUT_RESERVED(aivs_load_model_request_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_prepare_stream_request_t, 56U);
 AIVS_LAYOUT_FIELD(aivs_prepare_stream_request_t, struct_size, 0U);
@@ -107,6 +120,7 @@ AIVS_LAYOUT_FIELD(aivs_prepare_stream_request_t, layout, 20U);
 AIVS_LAYOUT_FIELD(aivs_prepare_stream_request_t, maximum_frame_count, 24U);
 AIVS_LAYOUT_FIELD(aivs_prepare_stream_request_t, stream_id, 32U);
 AIVS_LAYOUT_FIELD(aivs_prepare_stream_request_t, reserved, 40U);
+AIVS_LAYOUT_RESERVED(aivs_prepare_stream_request_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_prepare_stream_result_t, 40U);
 AIVS_LAYOUT_FIELD(aivs_prepare_stream_result_t, struct_size, 0U);
@@ -114,6 +128,7 @@ AIVS_LAYOUT_FIELD(aivs_prepare_stream_result_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_prepare_stream_result_t, algorithmic_latency_frames, 8U);
 AIVS_LAYOUT_FIELD(aivs_prepare_stream_result_t, stream_generation, 16U);
 AIVS_LAYOUT_FIELD(aivs_prepare_stream_result_t, reserved, 24U);
+AIVS_LAYOUT_RESERVED(aivs_prepare_stream_result_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_process_audio_request_t, 104U);
 AIVS_LAYOUT_FIELD(aivs_process_audio_request_t, struct_size, 0U);
@@ -121,6 +136,7 @@ AIVS_LAYOUT_FIELD(aivs_process_audio_request_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_process_audio_request_t, input, 8U);
 AIVS_LAYOUT_FIELD(aivs_process_audio_request_t, stream_generation, 80U);
 AIVS_LAYOUT_FIELD(aivs_process_audio_request_t, reserved, 88U);
+AIVS_LAYOUT_RESERVED(aivs_process_audio_request_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_process_audio_result_t, 120U);
 AIVS_LAYOUT_FIELD(aivs_process_audio_result_t, struct_size, 0U);
@@ -129,6 +145,7 @@ AIVS_LAYOUT_FIELD(aivs_process_audio_result_t, output, 8U);
 AIVS_LAYOUT_FIELD(aivs_process_audio_result_t, processed_frame_count, 88U);
 AIVS_LAYOUT_FIELD(aivs_process_audio_result_t, stream_generation, 96U);
 AIVS_LAYOUT_FIELD(aivs_process_audio_result_t, reserved, 104U);
+AIVS_LAYOUT_RESERVED(aivs_process_audio_result_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_reset_request_t, 32U);
 AIVS_LAYOUT_FIELD(aivs_reset_request_t, struct_size, 0U);
@@ -136,22 +153,26 @@ AIVS_LAYOUT_FIELD(aivs_reset_request_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_reset_request_t, reason, 8U);
 AIVS_LAYOUT_FIELD(aivs_reset_request_t, reserved_u32, 12U);
 AIVS_LAYOUT_FIELD(aivs_reset_request_t, reserved, 16U);
+AIVS_LAYOUT_RESERVED(aivs_reset_request_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_reset_result_t, 32U);
 AIVS_LAYOUT_FIELD(aivs_reset_result_t, struct_size, 0U);
 AIVS_LAYOUT_FIELD(aivs_reset_result_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_reset_result_t, stream_generation, 8U);
 AIVS_LAYOUT_FIELD(aivs_reset_result_t, reserved, 16U);
+AIVS_LAYOUT_RESERVED(aivs_reset_result_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_shutdown_request_t, 24U);
 AIVS_LAYOUT_FIELD(aivs_shutdown_request_t, struct_size, 0U);
 AIVS_LAYOUT_FIELD(aivs_shutdown_request_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_shutdown_request_t, reserved, 8U);
+AIVS_LAYOUT_RESERVED(aivs_shutdown_request_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_get_metrics_request_t, 24U);
 AIVS_LAYOUT_FIELD(aivs_get_metrics_request_t, struct_size, 0U);
 AIVS_LAYOUT_FIELD(aivs_get_metrics_request_t, abi_version, 4U);
 AIVS_LAYOUT_FIELD(aivs_get_metrics_request_t, reserved, 8U);
+AIVS_LAYOUT_RESERVED(aivs_get_metrics_request_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_engine_metrics_t, 56U);
 AIVS_LAYOUT_FIELD(aivs_engine_metrics_t, struct_size, 0U);
@@ -161,6 +182,7 @@ AIVS_LAYOUT_FIELD(aivs_engine_metrics_t, input_frame_count, 16U);
 AIVS_LAYOUT_FIELD(aivs_engine_metrics_t, output_frame_count, 24U);
 AIVS_LAYOUT_FIELD(aivs_engine_metrics_t, process_error_count, 32U);
 AIVS_LAYOUT_FIELD(aivs_engine_metrics_t, reserved, 40U);
+AIVS_LAYOUT_RESERVED(aivs_engine_metrics_t, 2U);
 
 AIVS_LAYOUT_TYPE(aivs_voice_engine_api_t, 104U);
 AIVS_LAYOUT_FIELD(aivs_voice_engine_api_t, struct_size, 0U);
@@ -174,7 +196,9 @@ AIVS_LAYOUT_FIELD(aivs_voice_engine_api_t, process_audio, 48U);
 AIVS_LAYOUT_FIELD(aivs_voice_engine_api_t, reset, 56U);
 AIVS_LAYOUT_FIELD(aivs_voice_engine_api_t, get_metrics, 64U);
 AIVS_LAYOUT_FIELD(aivs_voice_engine_api_t, reserved, 72U);
+AIVS_LAYOUT_RESERVED(aivs_voice_engine_api_t, 4U);
 
+#undef AIVS_LAYOUT_RESERVED
 #undef AIVS_LAYOUT_TYPE
 #undef AIVS_LAYOUT_FIELD
 #undef AIVS_LAYOUT_ALIGNOF
