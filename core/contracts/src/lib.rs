@@ -1,8 +1,10 @@
 //! Shared Rust contract boundary for AI Voice Studio.
 
 mod generated;
+mod runtime_message_generated;
 
 pub use generated::*;
+pub mod runtime_message;
 
 #[cfg(test)]
 mod tests {

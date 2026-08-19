@@ -20,8 +20,16 @@ const REQUIRED_ERROR_CODES = [
   "BufferTooSmall",
   "InternalError",
 ];
+const RUNTIME_MESSAGE_KINDS = ["Hello", "Request", "Response"];
+const RUNTIME_MESSAGE_COMMANDS = [
+  "None",
+  "Ping",
+  "GetCapabilities",
+  "RunMockPipeline",
+  "Shutdown",
+];
 const SOURCE_DESCRIPTION =
-  "core/contracts/version.json and core/contracts/error-codes.json";
+  "core/contracts/version.json, core/contracts/error-codes.json, and core/contracts/runtime-message-v1.json";
 
 class ContractValidationError extends Error {}
 
@@ -209,14 +217,207 @@ function validateErrorCodeDocument(errorCodes) {
   return { schemaVersion: errorCodes.schema_version, ranges, codes };
 }
 
-export function validateContracts({ version, errorCodes, rootVersion }) {
+function validateRuntimeMessageDocument(runtimeMessage) {
+  requireExactKeys(runtimeMessage, "runtime-message-v1.json", [
+    "schema_version",
+    "contract",
+    "encoding",
+    "protocol_version_source",
+    "error_code_source",
+    "limits",
+    "message_kinds",
+    "commands",
+    "invariants",
+    "payload_semantics",
+    "decoder",
+    "transport",
+  ]);
+  if (runtimeMessage.schema_version !== 1 || runtimeMessage.contract !== "RuntimeMessage") {
+    fail("runtime-message-v1.json must define RuntimeMessage schema_version 1");
+  }
+  if (runtimeMessage.protocol_version_source !== "version.json#/ipc_protocol") {
+    fail("RuntimeMessage protocol_version_source must reference version.json#/ipc_protocol");
+  }
+  if (runtimeMessage.error_code_source !== "error-codes.json#/codes") {
+    fail("RuntimeMessage error_code_source must reference error-codes.json#/codes");
+  }
+
+  const encoding = runtimeMessage.encoding;
+  requireExactKeys(encoding, "RuntimeMessage encoding", [
+    "byte_order",
+    "magic_ascii",
+    "wire_version",
+    "header_size_bytes",
+    "header_fields",
+    "flags_known_mask",
+    "reserved_value",
+  ]);
+  if (encoding.byte_order !== "little-endian") {
+    fail("RuntimeMessage byte_order must be little-endian");
+  }
+  const magic = requireString(encoding.magic_ascii, "RuntimeMessage magic_ascii");
+  if (!/^[\x20-\x7e]{4}$/.test(magic)) {
+    fail("RuntimeMessage magic_ascii must contain exactly four ASCII bytes");
+  }
+  const wireVersion = requireInteger(encoding.wire_version, "RuntimeMessage wire_version", {
+    min: 1,
+    max: 0xffff,
+  });
+  const headerSize = requireInteger(encoding.header_size_bytes, "RuntimeMessage header_size_bytes", {
+    min: 1,
+  });
+  if (encoding.flags_known_mask !== 0 || encoding.reserved_value !== 0) {
+    fail("RuntimeMessage v1 flags_known_mask and reserved_value must be zero");
+  }
+  const expectedFields = [
+    ["magic", 0, 4, "ascii[4]"],
+    ["wire_version", 4, 2, "u16"],
+    ["message_kind", 6, 1, "u8"],
+    ["flags", 7, 1, "u8"],
+    ["protocol_version", 8, 4, "u32"],
+    ["request_id", 12, 8, "u64"],
+    ["command", 20, 2, "u16"],
+    ["reserved", 22, 2, "u16"],
+    ["error_code", 24, 4, "i32"],
+    ["payload_length", 28, 4, "u32"],
+  ];
+  if (!Array.isArray(encoding.header_fields) || encoding.header_fields.length !== expectedFields.length) {
+    fail("RuntimeMessage header_fields must define the canonical v1 header");
+  }
+  let nextOffset = 0;
+  for (let index = 0; index < expectedFields.length; index += 1) {
+    const field = encoding.header_fields[index];
+    requireExactKeys(field, `RuntimeMessage header_fields[${index}]`, [
+      "name",
+      "offset",
+      "width_bytes",
+      "type",
+    ]);
+    const [name, offset, width, type] = expectedFields[index];
+    if (
+      field.name !== name ||
+      field.offset !== offset ||
+      field.width_bytes !== width ||
+      field.type !== type ||
+      field.offset !== nextOffset
+    ) {
+      fail("RuntimeMessage header fields must be contiguous and match the canonical v1 layout");
+    }
+    nextOffset += width;
+  }
+  if (nextOffset !== headerSize) {
+    fail("RuntimeMessage header_size_bytes must equal the fixed field layout");
+  }
+
+  requireExactKeys(runtimeMessage.limits, "RuntimeMessage limits", [
+    "max_control_payload_bytes",
+    "max_frame_bytes",
+    "max_hello_payload_bytes",
+    "max_error_payload_bytes",
+    "max_ping_payload_bytes",
+  ]);
+  const maxPayload = requireInteger(
+    runtimeMessage.limits.max_control_payload_bytes,
+    "RuntimeMessage max_control_payload_bytes",
+    { min: 1, max: 1024 * 1024 },
+  );
+  const maxFrame = requireInteger(runtimeMessage.limits.max_frame_bytes, "RuntimeMessage max_frame_bytes", {
+    min: headerSize,
+  });
+  if (maxFrame !== headerSize + maxPayload) {
+    fail("RuntimeMessage max_frame_bytes must equal header_size_bytes plus max_control_payload_bytes");
+  }
+  const boundedLimit = (name) => {
+    const value = requireInteger(runtimeMessage.limits[name], `RuntimeMessage ${name}`);
+    if (value > maxPayload) {
+      fail(`RuntimeMessage ${name} must not exceed max_control_payload_bytes`);
+    }
+    return value;
+  };
+  const maxHello = boundedLimit("max_hello_payload_bytes");
+  const maxError = boundedLimit("max_error_payload_bytes");
+  const maxPing = boundedLimit("max_ping_payload_bytes");
+
+  const validateEnum = (items, expectedNames, label, max) => {
+    if (!Array.isArray(items) || items.length !== expectedNames.length) {
+      fail(`RuntimeMessage ${label} must contain the canonical v1 set`);
+    }
+    const values = new Set();
+    return items.map((item, index) => {
+      requireExactKeys(item, `RuntimeMessage ${label}[${index}]`, ["name", "value"]);
+      if (item.name !== expectedNames[index]) {
+        fail(`RuntimeMessage ${label} must use canonical v1 order`);
+      }
+      const value = requireInteger(item.value, `RuntimeMessage ${label} ${item.name}`, { max });
+      if (values.has(value)) {
+        fail(`duplicate ${label === "commands" ? "command" : "message kind"} value ${value}`);
+      }
+      values.add(value);
+      return { name: item.name, value };
+    });
+  };
+
+  const semanticSections = [
+    ["invariants", runtimeMessage.invariants, ["hello", "request", "response", "success_response", "error_response", "unknown_values"]],
+    ["payload_semantics", runtimeMessage.payload_semantics, ["encoding", "hello", "ping", "get_capabilities", "run_mock_pipeline", "shutdown", "error"]],
+    ["decoder", runtimeMessage.decoder, ["fatal_errors", "failed_state", "feed_atomicity", "retention", "eof"]],
+    ["transport", runtimeMessage.transport, ["neutral", "stdout", "diagnostics"]],
+  ];
+  for (const [label, section, keys] of semanticSections) {
+    requireExactKeys(section, `RuntimeMessage ${label}`, keys);
+    for (const key of keys) {
+      if (label === "decoder" && key === "fatal_errors") {
+        continue;
+      }
+      if (label === "transport" && key === "neutral") {
+        continue;
+      }
+      requireString(section[key], `RuntimeMessage ${label}.${key}`);
+    }
+  }
+  const expectedFatalErrors = [
+    "MalformedFrame",
+    "FrameTooLarge",
+    "UnsupportedProtocolVersion",
+  ];
+  if (
+    !Array.isArray(runtimeMessage.decoder.fatal_errors) ||
+    runtimeMessage.decoder.fatal_errors.length !== expectedFatalErrors.length ||
+    runtimeMessage.decoder.fatal_errors.some(
+      (name, index) => name !== expectedFatalErrors[index],
+    )
+  ) {
+    fail("RuntimeMessage decoder fatal_errors must contain the canonical framing error set");
+  }
+  if (runtimeMessage.transport.neutral !== true) {
+    fail("RuntimeMessage transport must remain neutral");
+  }
+
+  return {
+    schemaVersion: runtimeMessage.schema_version,
+    magic,
+    wireVersion,
+    headerSize,
+    maxPayload,
+    maxFrame,
+    maxHello,
+    maxError,
+    maxPing,
+    kinds: validateEnum(runtimeMessage.message_kinds, RUNTIME_MESSAGE_KINDS, "message_kinds", 0xff),
+    commands: validateEnum(runtimeMessage.commands, RUNTIME_MESSAGE_COMMANDS, "commands", 0xffff),
+  };
+}
+
+export function validateContracts({ version, errorCodes, runtimeMessage, rootVersion }) {
   const normalizedRootVersion = requireString(rootVersion, "root VERSION");
   if (!/^\d+\.\d+\.\d+$/.test(normalizedRootVersion)) {
     fail("root VERSION must use major.minor.patch");
   }
+  const validatedVersion = validateVersionDocument(version, normalizedRootVersion);
   return {
-    version: validateVersionDocument(version, normalizedRootVersion),
+    version: validatedVersion,
     errors: validateErrorCodeDocument(errorCodes),
+    runtimeMessage: validateRuntimeMessageDocument(runtimeMessage),
   };
 }
 
@@ -282,15 +483,50 @@ export function renderC(model) {
   );
 }
 
+export function renderRuntimeMessageRust(model) {
+  const message = model.runtimeMessage;
+  const kinds = message.kinds.map((item) => `    ${item.name} = ${item.value},`).join("\n");
+  const kindMatches = message.kinds
+    .map((item) => `        ${item.value} => Some(MessageKind::${item.name}),`)
+    .join("\n");
+  const commands = message.commands.map((item) => `    ${item.name} = ${item.value},`).join("\n");
+  const commandMatches = message.commands
+    .map((item) => `        ${item.value} => Some(Command::${item.name}),`)
+    .join("\n");
+  return `// @generated by tools/scripts/contracts.mjs from ${SOURCE_DESCRIPTION}.\n// Do not edit manually; run \`pnpm contracts:generate\`.\n\npub const RUNTIME_MESSAGE_SCHEMA_VERSION: u32 = ${message.schemaVersion};\npub const MAGIC: [u8; 4] = *b${JSON.stringify(message.magic)};\npub const WIRE_VERSION: u16 = ${message.wireVersion};\npub const HEADER_SIZE: usize = ${message.headerSize};\npub const MAX_CONTROL_PAYLOAD_BYTES: usize = ${message.maxPayload};\npub const MAX_FRAME_BYTES: usize = ${message.maxFrame};\npub const MAX_HELLO_PAYLOAD_BYTES: usize = ${message.maxHello};\npub const MAX_ERROR_PAYLOAD_BYTES: usize = ${message.maxError};\npub const MAX_PING_PAYLOAD_BYTES: usize = ${message.maxPing};\n\n#[repr(u8)]\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum MessageKind {\n${kinds}\n}\n\npub const fn message_kind_from_value(value: u8) -> Option<MessageKind> {\n    match value {\n${kindMatches}\n        _ => None,\n    }\n}\n\n#[repr(u16)]\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum Command {\n${commands}\n}\n\npub const fn command_from_value(value: u16) -> Option<Command> {\n    match value {\n${commandMatches}\n        _ => None,\n    }\n}\n`;
+}
+
+export function renderRuntimeMessageCpp(model) {
+  const message = model.runtimeMessage;
+  const magic = [...message.magic].map((byte) => `'${byte}'`).join(", ");
+  const kinds = message.kinds.map((item) => `  ${item.name} = ${item.value},`).join("\n");
+  const kindMatches = message.kinds
+    .map((item) => `    case ${item.value}: return MessageKind::${item.name};`)
+    .join("\n");
+  const commands = message.commands.map((item) => `  ${item.name} = ${item.value},`).join("\n");
+  const commandMatches = message.commands
+    .map((item) => `    case ${item.value}: return Command::${item.name};`)
+    .join("\n");
+  return `// @generated by tools/scripts/contracts.mjs from ${SOURCE_DESCRIPTION}.\n// Do not edit manually; run \`pnpm contracts:generate\`.\n\n#pragma once\n\n#include <array>\n#include <cstddef>\n#include <cstdint>\n#include <optional>\n\nnamespace ai_voice::contracts::runtime_message {\n\ninline constexpr std::uint32_t kRuntimeMessageSchemaVersion = ${message.schemaVersion}U;\ninline constexpr std::array<std::uint8_t, 4> kMagic{${magic}};\ninline constexpr std::uint16_t kWireVersion = ${message.wireVersion}U;\ninline constexpr std::size_t kHeaderSize = ${message.headerSize}U;\ninline constexpr std::size_t kMaxControlPayloadBytes = ${message.maxPayload}U;\ninline constexpr std::size_t kMaxFrameBytes = ${message.maxFrame}U;\ninline constexpr std::size_t kMaxHelloPayloadBytes = ${message.maxHello}U;\ninline constexpr std::size_t kMaxErrorPayloadBytes = ${message.maxError}U;\ninline constexpr std::size_t kMaxPingPayloadBytes = ${message.maxPing}U;\n\nenum class MessageKind : std::uint8_t {\n${kinds}\n};\n\nconstexpr std::optional<MessageKind> message_kind_from_value(std::uint8_t value) {\n  switch (value) {\n${kindMatches}\n    default: return std::nullopt;\n  }\n}\n\nenum class Command : std::uint16_t {\n${commands}\n};\n\nconstexpr std::optional<Command> command_from_value(std::uint16_t value) {\n  switch (value) {\n${commandMatches}\n    default: return std::nullopt;\n  }\n}\n\n}  // namespace ai_voice::contracts::runtime_message\n`;
+}
+
 function pathsFor(root) {
   const contractsRoot = path.join(root, "core", "contracts");
   return {
     version: path.join(contractsRoot, "version.json"),
     errorCodes: path.join(contractsRoot, "error-codes.json"),
+    runtimeMessage: path.join(contractsRoot, "runtime-message-v1.json"),
     rootVersion: path.join(root, "VERSION"),
     rust: path.join(contractsRoot, "src", "generated.rs"),
     cpp: path.join(contractsRoot, "include", "ai_voice_contracts", "generated_contracts.hpp"),
     c: path.join(contractsRoot, "include", "ai_voice_contracts", "generated_contracts_c.h"),
+    runtimeRust: path.join(contractsRoot, "src", "runtime_message_generated.rs"),
+    runtimeCpp: path.join(
+      contractsRoot,
+      "include",
+      "ai_voice_contracts",
+      "runtime_message_generated.hpp",
+    ),
   };
 }
 
@@ -300,12 +536,15 @@ function outputsFor(root) {
   const model = validateContracts({
     version: readJson(paths.version),
     errorCodes: readJson(paths.errorCodes),
+    runtimeMessage: readJson(paths.runtimeMessage),
     rootVersion,
   });
   return [
     { path: paths.rust, contents: renderRust(model) },
     { path: paths.cpp, contents: renderCpp(model) },
     { path: paths.c, contents: renderC(model) },
+    { path: paths.runtimeRust, contents: renderRuntimeMessageRust(model) },
+    { path: paths.runtimeCpp, contents: renderRuntimeMessageCpp(model) },
   ];
 }
 

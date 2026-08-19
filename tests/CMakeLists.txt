@@ -3,6 +3,15 @@ target_link_libraries(aivs_contract_mapping_test PRIVATE ai_voice_contracts)
 
 add_test(NAME aivs_contract_mapping_test COMMAND aivs_contract_mapping_test)
 
+add_executable(aivs_runtime_message_cpp_test contract/runtime_message_cpp_test.cpp)
+target_link_libraries(aivs_runtime_message_cpp_test PRIVATE ai_voice_contracts)
+target_compile_definitions(
+  aivs_runtime_message_cpp_test
+  PRIVATE
+    AIVS_RUNTIME_MESSAGE_FIXTURE="${PROJECT_SOURCE_DIR}/core/contracts/fixtures/runtime-message-v1-ping-request.hex"
+)
+add_test(NAME aivs_runtime_message_cpp_test COMMAND aivs_runtime_message_cpp_test)
+
 add_executable(aivs_voice_engine_c_abi_c_test contract/voice_engine_c_abi_c_test.c)
 target_link_libraries(aivs_voice_engine_c_abi_c_test PRIVATE ai_voice::voice_engine_abi)
 add_test(NAME aivs_voice_engine_c_abi_c_test COMMAND aivs_voice_engine_c_abi_c_test)

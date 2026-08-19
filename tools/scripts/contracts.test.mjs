@@ -14,7 +14,10 @@ import { fileURLToPath } from "node:url";
 
 const toolPath = fileURLToPath(new URL("./contracts.mjs", import.meta.url));
 
-function writeFixture(root, { version = validVersion(), errorCodes = validErrorCodes() } = {}) {
+function writeFixture(
+  root,
+  { version = validVersion(), errorCodes = validErrorCodes(), runtimeMessage = validRuntimeMessage() } = {},
+) {
   writeFileSync(path.join(root, "VERSION"), "0.0.0\n");
   const contracts = path.join(root, "core", "contracts");
   const rustSource = path.join(contracts, "src");
@@ -26,6 +29,10 @@ function writeFixture(root, { version = validVersion(), errorCodes = validErrorC
   writeFileSync(
     path.join(contracts, "error-codes.json"),
     `${JSON.stringify(errorCodes, null, 2)}\n`,
+  );
+  writeFileSync(
+    path.join(contracts, "runtime-message-v1.json"),
+    `${JSON.stringify(runtimeMessage, null, 2)}\n`,
   );
 }
 
@@ -68,6 +75,15 @@ function validErrorCodes() {
   };
 }
 
+function validRuntimeMessage() {
+  return JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL("../../core/contracts/runtime-message-v1.json", import.meta.url)),
+      "utf8",
+    ),
+  );
+}
+
 function run(root, mode) {
   return execFileSync(process.execPath, [toolPath, mode, "--root", root], {
     encoding: "utf8",
@@ -102,17 +118,50 @@ test("generate produces repeatable mappings accepted by read-only check", (t) =>
     root,
     "core/contracts/include/ai_voice_contracts/generated_contracts_c.h",
   );
+  const runtimeRustPath = path.join(root, "core/contracts/src/runtime_message_generated.rs");
+  const runtimeCppPath = path.join(
+    root,
+    "core/contracts/include/ai_voice_contracts/runtime_message_generated.hpp",
+  );
   const firstRust = readFileSync(rustPath, "utf8");
   const firstCpp = readFileSync(cppPath, "utf8");
   const firstC = readFileSync(cPath, "utf8");
+  const firstRuntimeRust = readFileSync(runtimeRustPath, "utf8");
+  const firstRuntimeCpp = readFileSync(runtimeCppPath, "utf8");
 
   assert.doesNotThrow(() => run(root, "check"));
   run(root, "generate");
   assert.equal(readFileSync(rustPath, "utf8"), firstRust);
   assert.equal(readFileSync(cppPath, "utf8"), firstCpp);
   assert.equal(readFileSync(cPath, "utf8"), firstC);
+  assert.equal(readFileSync(runtimeRustPath, "utf8"), firstRuntimeRust);
+  assert.equal(readFileSync(runtimeCppPath, "utf8"), firstRuntimeCpp);
   assert.match(firstC, /AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION/);
   assert.match(firstC, /AIVS_ERROR_INVALID_ARGUMENT/);
+  assert.match(firstRuntimeRust, /pub const HEADER_SIZE: usize = 32/);
+  assert.match(firstRuntimeCpp, /kMaxControlPayloadBytes = 65536U/);
+});
+
+test("check rejects malformed RuntimeMessage layout and limits", (t) => {
+  const overlapping = validRuntimeMessage();
+  overlapping.encoding.header_fields[1].offset = 0;
+  const overlappingRoot = fixture(t, { runtimeMessage: overlapping });
+  assert.match(runFailure(overlappingRoot, "check"), /header fields must be contiguous/);
+
+  const wrongFrameSize = validRuntimeMessage();
+  wrongFrameSize.limits.max_frame_bytes = 65567;
+  const wrongFrameSizeRoot = fixture(t, { runtimeMessage: wrongFrameSize });
+  assert.match(runFailure(wrongFrameSizeRoot, "check"), /max_frame_bytes/);
+
+  const duplicateCommand = validRuntimeMessage();
+  duplicateCommand.commands[2].value = 1;
+  const duplicateCommandRoot = fixture(t, { runtimeMessage: duplicateCommand });
+  assert.match(runFailure(duplicateCommandRoot, "check"), /duplicate command value/);
+
+  const wrongFatalErrors = validRuntimeMessage();
+  wrongFatalErrors.decoder.fatal_errors = ["InvalidState"];
+  const wrongFatalErrorsRoot = fixture(t, { runtimeMessage: wrongFatalErrors });
+  assert.match(runFailure(wrongFatalErrorsRoot, "generate"), /fatal_errors/);
 });
 
 test("check detects stale generated output without rewriting it", (t) => {

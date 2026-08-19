@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "contract": "RuntimeMessage",
+  "encoding": {
+    "byte_order": "little-endian",
+    "magic_ascii": "AVRM",
+    "wire_version": 1,
+    "header_size_bytes": 32,
+    "header_fields": [
+      { "name": "magic", "offset": 0, "width_bytes": 4, "type": "ascii[4]" },
+      { "name": "wire_version", "offset": 4, "width_bytes": 2, "type": "u16" },
+      { "name": "message_kind", "offset": 6, "width_bytes": 1, "type": "u8" },
+      { "name": "flags", "offset": 7, "width_bytes": 1, "type": "u8" },
+      { "name": "protocol_version", "offset": 8, "width_bytes": 4, "type": "u32" },
+      { "name": "request_id", "offset": 12, "width_bytes": 8, "type": "u64" },
+      { "name": "command", "offset": 20, "width_bytes": 2, "type": "u16" },
+      { "name": "reserved", "offset": 22, "width_bytes": 2, "type": "u16" },
+      { "name": "error_code", "offset": 24, "width_bytes": 4, "type": "i32" },
+      { "name": "payload_length", "offset": 28, "width_bytes": 4, "type": "u32" }
+    ],
+    "flags_known_mask": 0,
+    "reserved_value": 0
+  },
+  "protocol_version_source": "version.json#/ipc_protocol",
+  "error_code_source": "error-codes.json#/codes",
+  "limits": {
+    "max_control_payload_bytes": 65536,
+    "max_frame_bytes": 65568,
+    "max_hello_payload_bytes": 1024,
+    "max_error_payload_bytes": 4096,
+    "max_ping_payload_bytes": 256
+  },
+  "message_kinds": [
+    { "name": "Hello", "value": 1 },
+    { "name": "Request", "value": 2 },
+    { "name": "Response", "value": 3 }
+  ],
+  "commands": [
+    { "name": "None", "value": 0 },
+    { "name": "Ping", "value": 1 },
+    { "name": "GetCapabilities", "value": 2 },
+    { "name": "RunMockPipeline", "value": 3 },
+    { "name": "Shutdown", "value": 4 }
+  ],
+  "invariants": {
+    "hello": "request_id=0, command=None, error_code=Success",
+    "request": "request_id!=0, command is a Phase 0.5 command, error_code=Success",
+    "response": "request_id!=0, command echoes its request, error_code is canonical",
+    "success_response": "error_code=Success and payload is the command result",
+    "error_response": "error_code!=Success and payload is bounded opaque diagnostic control data",
+    "unknown_values": "unknown kind, command, error code, flags, or reserved values are malformed"
+  },
+  "payload_semantics": {
+    "encoding": "opaque command-owned control bytes; a later command contract may require UTF-8 JSON",
+    "hello": "bounded negotiation metadata only",
+    "ping": "at most 256 request/response bytes",
+    "get_capabilities": "empty request; bounded response control data",
+    "run_mock_pipeline": "bounded parameters/result summary only; PCM, model bytes, and audio buffers are forbidden",
+    "shutdown": "empty success request/response",
+    "error": "at most 4096 diagnostic bytes; never PCM, model bytes, or audio buffers"
+  },
+  "decoder": {
+    "fatal_errors": ["MalformedFrame", "FrameTooLarge", "UnsupportedProtocolVersion"],
+    "failed_state": "after a fatal error, feed/eof repeat the original fatal framing error until explicit reset",
+    "feed_atomicity": "a feed call containing a fatal frame returns no messages from that call",
+    "retention": "retain at most one legal frame and reject oversized payload_length before body allocation",
+    "eof": "empty boundary is clean; a partial header or body is MalformedFrame"
+  },
+  "transport": {
+    "neutral": true,
+    "stdout": "C++ stdout is reserved exclusively for framed protocol bytes",
+    "diagnostics": "diagnostics and logs use stderr or files"
+  }
+}
