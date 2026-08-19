@@ -1,0 +1,205 @@
+name: Cross-platform build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64:
+    name: macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up exact Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Set up exact CMake and Ninja
+        uses: lukka/get-cmake@fffaaafeea488556c2c12dad60690008bc1caacb # v4.4.2
+        with:
+          cmakeVersion: 4.4.2
+          ninjaVersion: 1.13.2
+          useCloudCache: false
+          useLocalCache: false
+
+      - name: Set up and verify exact toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          corepack enable
+          corepack prepare pnpm@11.19.0 --activate
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          test "$(node --version)" = "v24.16.0"
+          test "$(pnpm --version)" = "11.19.0"
+          test "$(rustc +1.97.1 -vV | awk '/^host: / { print $2 }')" = "aarch64-apple-darwin"
+          test "$(cmake --version | awk 'NR == 1 { print $3 }')" = "4.4.2"
+          test "$(ninja --version)" = "1.13.2"
+          node tools/scripts/doctor.mjs
+
+      - name: Install locked JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check contracts and frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm contracts:check
+          pnpm test
+          pnpm --filter @ai-voice-studio/desktop lint
+          pnpm --filter @ai-voice-studio/desktop typecheck
+          pnpm --filter @ai-voice-studio/desktop build
+
+      - name: Check Rust workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 fmt --all -- --check
+          cargo +1.97.1 check --locked --workspace --all-targets
+          cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings
+          cargo +1.97.1 test --locked --workspace
+
+      - name: Build and test native Debug and Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset native-debug
+          cmake --build --preset native-debug --parallel 2
+          ctest --preset native-debug
+          cmake --preset native-release
+          cmake --build --preset native-release --parallel 2
+          ctest --preset native-release
+
+      - name: Build and verify the Tauri app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/scripts/stage-desktop-native.mjs --profile Release --target aarch64-apple-darwin
+          pnpm desktop:test:native
+          pnpm --filter @ai-voice-studio/desktop tauri build --bundles app --ci
+          node tools/scripts/verify-desktop-bundle.mjs \
+            "target/release/bundle/macos/AI Voice Studio.app" \
+            aarch64-apple-darwin
+
+  windows-x64:
+    name: Windows x64 MSVC
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up exact Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Set up exact CMake and Ninja
+        uses: lukka/get-cmake@fffaaafeea488556c2c12dad60690008bc1caacb # v4.4.2
+        with:
+          cmakeVersion: 4.4.2
+          ninjaVersion: 1.13.2
+          useCloudCache: false
+          useLocalCache: false
+
+      - name: Set up and verify exact toolchains
+        shell: pwsh
+        run: |
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [System.Runtime.InteropServices.Architecture]::X64) {
+            throw "windows-latest did not provide an x64 runner"
+          }
+          corepack enable
+          corepack prepare pnpm@11.19.0 --activate
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          if ((node --version) -ne "v24.16.0") { throw "unexpected Node.js version" }
+          if ((pnpm --version) -ne "11.19.0") { throw "unexpected pnpm version" }
+          $rustHost = (rustc +1.97.1 -vV | Select-String "^host: ").Line.Substring(6)
+          if ($rustHost -ne "x86_64-pc-windows-msvc") { throw "unexpected Rust host: $rustHost" }
+          if ((cmake --version | Select-Object -First 1) -ne "cmake version 4.4.2") { throw "unexpected CMake version" }
+          if ((ninja --version) -ne "1.13.2") { throw "unexpected Ninja version" }
+
+      - name: Install locked JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check contracts and frontend
+        shell: pwsh
+        run: |
+          pnpm contracts:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @ai-voice-studio/desktop lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @ai-voice-studio/desktop typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @ai-voice-studio/desktop build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check Rust workspace
+        shell: pwsh
+        run: |
+          cargo +1.97.1 fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.97.1 check --locked --workspace --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.97.1 test --locked --workspace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build native gates and the Tauri portable layout with MSVC
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vsPath) { throw "Visual Studio C++ tools were not found" }
+          Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64"
+          node tools/scripts/doctor.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          cmake --preset native-debug
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset native-debug --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --preset native-debug
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build/native-debug --output-on-failure -R "^(aivs_mock_voice_engine_exports|aivs_mock_voice_engine_dynamic_test|aivs_voice_runtime_smoke|aivs_runtime_manager_child_test|aivs_runtime_manager_gate_test|aivs_desktop_exit_runtime_race_test)$"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          cmake --preset native-release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset native-release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --preset native-release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          node tools/scripts/stage-desktop-native.mjs --profile Release --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm desktop:test:native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @ai-voice-studio/desktop tauri build --no-bundle --ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $layout = Join-Path $PWD "target/ci-windows-layout"
+          New-Item -ItemType Directory -Force "$layout/native", "$layout/config" | Out-Null
+          Copy-Item "target/release/ai-voice-studio.exe" "$layout/ai-voice-studio.exe"
+          Copy-Item "apps/desktop/src-tauri/binaries/voice-runtime-x86_64-pc-windows-msvc.exe" "$layout/voice-runtime.exe"
+          Copy-Item "apps/desktop/src-tauri/resources/native/aivs_mock_voice_engine-x86_64-pc-windows-msvc.dll" "$layout/native/aivs_mock_voice_engine-x86_64-pc-windows-msvc.dll"
+          Copy-Item "apps/desktop/src-tauri/resources/config/config.json" "$layout/config/config.json"
+          node tools/scripts/verify-desktop-bundle.mjs $layout x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

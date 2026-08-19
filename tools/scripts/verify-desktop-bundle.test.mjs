@@ -48,3 +48,25 @@ test("bundle verification rejects the accidental nested resources layout", async
     /bundle is missing a required Tauri-owned artifact/,
   );
 });
+
+test("bundle verification accepts the Windows x64 executable and DLL layout", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "aivs-bundle-windows-声音-"));
+  const expected = [
+    "ai-voice-studio.exe",
+    "voice-runtime.exe",
+    "native/aivs_mock_voice_engine-x86_64-pc-windows-msvc.dll",
+    "config/config.json",
+  ];
+  for (const relative of expected) {
+    const absolute = path.join(root, relative);
+    await mkdir(path.dirname(absolute), { recursive: true });
+    await writeFile(absolute, relative);
+  }
+
+  assert.deepEqual(await verifyDesktopBundle(root, "x86_64-pc-windows-msvc"), {
+    application: path.join(root, expected[0]),
+    runtime: path.join(root, expected[1]),
+    plugin: path.join(root, expected[2]),
+    config: path.join(root, expected[3]),
+  });
+});

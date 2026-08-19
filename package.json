@@ -16,12 +16,16 @@
     "contracts:generate": "node tools/scripts/contracts.mjs generate",
     "contracts:check": "node tools/scripts/contracts.mjs check",
     "test:contracts": "node --test tools/scripts/contracts.test.mjs",
-    "test": "pnpm contracts:check && pnpm test:contracts && pnpm test:doctor && pnpm test:desktop-staging && pnpm test:desktop-bundle && pnpm --filter @ai-voice-studio/desktop test",
+    "test": "pnpm contracts:check && pnpm test:contracts && pnpm test:doctor && pnpm test:desktop-staging && pnpm test:desktop-bundle && pnpm test:ci && pnpm --filter @ai-voice-studio/desktop test",
     "test:desktop-bundle": "node --test tools/scripts/verify-desktop-bundle.test.mjs",
     "test:desktop-staging": "node --test tools/scripts/stage-desktop-native.test.mjs",
+    "test:ci": "node --test tools/scripts/build-workflow.test.mjs",
     "test:doctor": "node --test tools/scripts/doctor.test.mjs",
     "format:check": "cargo fmt --all -- --check",
     "doctor": "node tools/scripts/doctor.mjs",
     "workspace:list": "pnpm --recursive list --depth -1"
+  },
+  "devDependencies": {
+    "yaml": "2.9.0"
   }
 }
