@@ -290,6 +290,11 @@ RuntimeLoggerInitialization RuntimeLogger::initialize(RuntimeLoggingConfig confi
     auto stderr_sink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
     std::vector<spdlog::sink_ptr> sinks{file_sink, stderr_sink};
     auto logger = std::make_shared<spdlog::logger>("voice-runtime", sinks.begin(), sinks.end());
+    // spdlog's default handler writes exception details (including sink paths)
+    // directly to stderr. Late sink failures are intentionally contained: the
+    // handler is instance-owned, non-throwing, and performs no I/O that could
+    // recurse into the failing sink or corrupt stdout IPC.
+    logger->set_error_handler([](const std::string&) noexcept {});
     logger->set_pattern("%v");
     logger->set_level(spdlog_level(config.policy.level()));
     return {

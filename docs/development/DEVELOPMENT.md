@@ -117,8 +117,10 @@ Development logs are JSONL under the host-resolved directory configured by
 IPC and must never be redirected into a text log. Both logging authorities
 require an explicit debug bit before trace/debug can be enabled, and the native
 process rejects an inconsistent argument pair. Phase 0.5 does not rotate or
-delete logs; remove old development logs manually while both processes are
-stopped.
+delete logs. A late native file-sink failure is contained silently to preserve
+the stderr JSONL and stdout IPC contracts; stop both processes and repair the
+configured directory before relying on file logging again. Remove old
+development logs manually while both processes are stopped.
 
 Tauri CLI is intentionally not a global prerequisite. When the desktop shell
 is introduced, its CLI will be a versioned repository dependency and invoked

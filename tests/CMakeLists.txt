@@ -102,6 +102,16 @@ add_executable(aivs_runtime_logging_test runtime/runtime_logging_test.cpp)
 target_link_libraries(aivs_runtime_logging_test PRIVATE ai_voice::runtime_logging)
 add_test(NAME aivs_runtime_logging_test COMMAND aivs_runtime_logging_test)
 
+add_executable(aivs_runtime_late_log_failure_test runtime/runtime_late_log_failure_test.cpp)
+target_link_libraries(
+  aivs_runtime_late_log_failure_test
+  PRIVATE ai_voice::contracts
+)
+add_test(
+  NAME aivs_runtime_late_log_failure_test
+  COMMAND aivs_runtime_late_log_failure_test $<TARGET_FILE:voice-runtime>
+)
+
 add_executable(aivs_runtime_session_test runtime/runtime_session_test.cpp)
 target_link_libraries(aivs_runtime_session_test PRIVATE ai_voice_runtime_session)
 add_test(NAME aivs_runtime_session_test COMMAND aivs_runtime_session_test)

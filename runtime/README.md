@@ -15,7 +15,11 @@ writes unified JSONL synchronously to stderr and `voice-runtime.jsonl`; logger
 destruction flushes the file. Initialization failure exits with an actionable
 stderr diagnostic before any stdout frame is written. Logger initialization
 rejects an invalid UTF-8 component, while invalid message byte sequences are
-replaced with U+FFFD before the result is truncated at a UTF-8 boundary.
+replaced with U+FFFD before the result is truncated at a UTF-8 boundary. Each
+logger installs its own non-throwing spdlog error handler. A file sink failure
+after initialization is contained silently so spdlog cannot print exception
+details, absolute paths, or non-JSON text to stderr; the handler performs no
+retry or fallback I/O and therefore cannot recurse into the failed sink.
 
 No logging dependency enters the Mock engine target: configure-time target
 guards pin its direct dependency surface, while a reviewed source hash pins the

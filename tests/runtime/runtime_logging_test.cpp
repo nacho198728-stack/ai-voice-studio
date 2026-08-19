@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +14,8 @@
 #include <vector>
 
 #include <ai_voice_runtime/logging.hpp>
+
+#include "jsonl_test_support.hpp"
 
 namespace runtime = ai_voice::runtime;
 
@@ -38,174 +39,33 @@ runtime::LoggingPolicy logging_policy(bool debug_enabled, runtime::LogLevel leve
   return *policy;
 }
 
-std::size_t valid_utf8_sequence_length(std::string_view value, std::size_t offset) {
-  const auto available = value.size() - offset;
-  const auto first = static_cast<unsigned char>(value[offset]);
-  const auto continuation = [&](std::size_t index) {
-    return index < available &&
-           (static_cast<unsigned char>(value[offset + index]) & 0xC0U) == 0x80U;
-  };
-  if (first <= 0x7FU) {
-    return 1U;
-  }
-  if (first >= 0xC2U && first <= 0xDFU && continuation(1U)) {
-    return 2U;
-  }
-  if (available >= 3U && continuation(1U) && continuation(2U) &&
-      ((first == 0xE0U && static_cast<unsigned char>(value[offset + 1U]) >= 0xA0U) ||
-       (first >= 0xE1U && first <= 0xECU) ||
-       (first == 0xEDU && static_cast<unsigned char>(value[offset + 1U]) <= 0x9FU) ||
-       (first >= 0xEEU && first <= 0xEFU))) {
-    return 3U;
-  }
-  if (available >= 4U && continuation(1U) && continuation(2U) && continuation(3U) &&
-      ((first == 0xF0U && static_cast<unsigned char>(value[offset + 1U]) >= 0x90U) ||
-       (first >= 0xF1U && first <= 0xF3U) ||
-       (first == 0xF4U && static_cast<unsigned char>(value[offset + 1U]) <= 0x8FU))) {
-    return 4U;
-  }
-  return 0U;
-}
-
-bool is_valid_utf8(std::string_view value) {
-  for (std::size_t offset = 0U; offset < value.size();) {
-    const auto length = valid_utf8_sequence_length(value, offset);
-    if (length == 0U) {
-      return false;
-    }
-    offset += length;
-  }
-  return true;
-}
-
-enum class JsonValueKind {
-  String,
-  Unsigned,
-};
-
-struct JsonField {
-  std::string name;
-  JsonValueKind kind;
-};
-
-bool parse_json_string(std::string_view input, std::size_t& offset, std::string* decoded) {
-  if (offset == input.size() || input[offset++] != '"') {
-    return false;
-  }
-  while (offset < input.size()) {
-    const auto character = static_cast<unsigned char>(input[offset++]);
-    if (character == '"') {
-      return true;
-    }
-    if (character < 0x20U) {
-      return false;
-    }
-    if (character != '\\') {
-      if (decoded != nullptr) {
-        decoded->push_back(static_cast<char>(character));
-      }
-      continue;
-    }
-    if (offset == input.size()) {
-      return false;
-    }
-    const auto escaped = input[offset++];
-    if (escaped == 'u') {
-      for (std::size_t digit = 0U; digit < 4U; ++digit) {
-        if (offset == input.size() || !std::isxdigit(static_cast<unsigned char>(input[offset++]))) {
-          return false;
-        }
-      }
-      if (decoded != nullptr) {
-        decoded->push_back('?');
-      }
-      continue;
-    }
-    if (std::string_view{R"("\/bfnrt)"}.find(escaped) == std::string_view::npos) {
-      return false;
-    }
-    if (decoded != nullptr) {
-      decoded->push_back(escaped);
-    }
-  }
-  return false;
-}
-
-std::vector<JsonField> parse_json_object(std::string_view input) {
-  std::vector<JsonField> fields;
-  std::size_t offset = 0U;
-  if (input.empty() || input[offset++] != '{') {
-    return {};
-  }
-  while (offset < input.size() && input[offset] != '}') {
-    std::string name;
-    if (!parse_json_string(input, offset, &name) || offset == input.size() ||
-        input[offset++] != ':') {
-      return {};
-    }
-    JsonValueKind kind{};
-    if (offset < input.size() && input[offset] == '"') {
-      kind = JsonValueKind::String;
-      if (!parse_json_string(input, offset, nullptr)) {
-        return {};
-      }
-    } else {
-      kind = JsonValueKind::Unsigned;
-      const auto begin = offset;
-      while (offset < input.size() && input[offset] >= '0' && input[offset] <= '9') {
-        ++offset;
-      }
-      if (begin == offset || (input[begin] == '0' && offset - begin != 1U)) {
-        return {};
-      }
-    }
-    if (std::any_of(fields.begin(), fields.end(), [&](const JsonField& field) {
-          return field.name == name;
-        })) {
-      return {};
-    }
-    fields.push_back({std::move(name), kind});
-    if (offset < input.size() && input[offset] == ',') {
-      ++offset;
-    } else {
-      break;
-    }
-  }
-  if (offset == input.size() || input[offset++] != '}' || offset != input.size()) {
-    return {};
-  }
-  return fields;
-}
-
 void assert_jsonl_schema(std::string_view output, std::size_t expected_records) {
   std::size_t offset = 0U;
   std::size_t records = 0U;
   while (offset < output.size()) {
     const auto end = output.find('\n', offset);
     assert(end != std::string_view::npos);
-    const auto line = output.substr(offset, end - offset);
-    assert(is_valid_utf8(line));
-    const auto fields = parse_json_object(line);
-    assert(!fields.empty());
-    const auto has = [&](std::string_view name, JsonValueKind kind) {
-      return std::count_if(fields.begin(), fields.end(), [&](const JsonField& field) {
-               return field.name == name && field.kind == kind;
-             }) == 1;
-    };
-    assert(has("timestamp", JsonValueKind::String));
-    assert(has("component", JsonValueKind::String));
-    assert(has("level", JsonValueKind::String));
-    assert(has("message", JsonValueKind::String));
-    for (const auto& field : fields) {
-      assert(field.name == "timestamp" || field.name == "component" ||
-             field.name == "level" || field.name == "message" ||
-             ((field.name == "request_id" || field.name == "generation") &&
-              field.kind == JsonValueKind::Unsigned));
-    }
+    assert(aivs::test::is_unified_json_record(output.substr(offset, end - offset)));
     ++records;
     offset = end + 1U;
   }
   assert(records == expected_records);
+}
+
+void constrained_json_parser_rejects_non_emitter_grammar() {
+  constexpr std::string_view prefix =
+      R"({"timestamp":"2026-08-19T00:00:00.000000Z","component":"voice-runtime","level":"info","message":)";
+  assert(aivs::test::is_unified_json_record(std::string(prefix) + R"("control\u001b"})"));
+  assert(!aivs::test::is_unified_json_record(std::string(prefix) + R"("trailing",})"));
+  assert(!aivs::test::is_unified_json_record(std::string(prefix) + R"("slash\/escape"})"));
+  assert(!aivs::test::is_unified_json_record(std::string(prefix) + R"("short-control\u000a"})"));
+  assert(!aivs::test::is_unified_json_record(std::string(prefix) + R"("lone-high\uD800"})"));
+  assert(!aivs::test::is_unified_json_record(std::string(prefix) + R"("lone-low\uDC00"})"));
+  assert(!aivs::test::is_unified_json_record(
+      std::string(prefix) + R"("surrogate-pair\uD834\uDD1E"})"));
+  assert(!aivs::test::is_unified_json_record(std::string(prefix) + "\"raw\nnewline\"}"));
+  assert(!aivs::test::is_unified_json_record(
+      R"({"timestamp":"2026-08-19T00:00:00.000000Z","component":"voice-runtime","level":"info","message":"overflow","generation":18446744073709551616})"));
 }
 
 void schema_escaping_level_gating_flush_and_repeated_instances_are_isolated() {
@@ -304,6 +164,38 @@ void initialization_failure_is_actionable_and_does_not_leave_registered_state() 
   std::filesystem::remove_all(recovered);
 }
 
+void component_utf8_byte_boundaries_are_enforced() {
+  const auto accepted_directory = unique_directory("component-64");
+  const std::string exact_component = std::string(61U, 'a') + "界";
+  assert(exact_component.size() == runtime::kMaximumLogComponentBytes);
+  {
+    auto accepted = runtime::RuntimeLogger::initialize({
+        accepted_directory,
+        logging_policy(false, runtime::LogLevel::Info),
+        exact_component,
+    });
+    assert(accepted.logger != nullptr);
+    accepted.logger->log(runtime::LogLevel::Info, "exact component byte boundary");
+  }
+  const auto accepted_output =
+      read_file(accepted_directory / runtime::kRuntimeLogFileName);
+  assert_jsonl_schema(accepted_output, 1U);
+  assert(accepted_output.find(exact_component) != std::string::npos);
+  std::filesystem::remove_all(accepted_directory);
+
+  const auto rejected_directory = unique_directory("component-65");
+  const std::string oversized_component = std::string(62U, 'a') + "界";
+  assert(oversized_component.size() == runtime::kMaximumLogComponentBytes + 1U);
+  const auto rejected = runtime::RuntimeLogger::initialize({
+      rejected_directory,
+      logging_policy(false, runtime::LogLevel::Info),
+      oversized_component,
+  });
+  assert(rejected.logger == nullptr);
+  assert(!rejected.diagnostic.empty());
+  assert(!std::filesystem::exists(rejected_directory));
+}
+
 void invalid_message_utf8_is_replaced_before_bounded_jsonl_output() {
   const auto directory = unique_directory("invalid-message");
   {
@@ -359,7 +251,9 @@ int main() {
   assert(!runtime::LoggingPolicy::create(false, runtime::LogLevel::Trace).has_value());
   assert(!runtime::LoggingPolicy::create(false, runtime::LogLevel::Debug).has_value());
   assert(!runtime::LoggingPolicy::create(true, static_cast<runtime::LogLevel>(99)).has_value());
+  constrained_json_parser_rejects_non_emitter_grammar();
   schema_escaping_level_gating_flush_and_repeated_instances_are_isolated();
   initialization_failure_is_actionable_and_does_not_leave_registered_state();
+  component_utf8_byte_boundaries_are_enforced();
   invalid_message_utf8_is_replaced_before_bounded_jsonl_output();
 }
