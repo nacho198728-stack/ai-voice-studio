@@ -28,6 +28,9 @@ modified; ADR-003 remains reserved for Phase 1.
   initialization is no-throw, errors are bounded/actionable, and destruction
   flushes both sinks. Invalid UTF-8 components fail before directory creation;
   malformed message sequences become U+FFFD before UTF-8-safe byte bounding.
+  Every logger owns a non-throwing silent spdlog error handler, so a sink that
+  fails after initialization cannot invoke spdlog's default path-bearing,
+  non-JSON stderr diagnostic or recurse into the failed sink.
 - RuntimeManager emits actor lifecycle/request events without adding locks or
   changing selection/reap ordering. It explicitly passes the resolved log
   directory, validated logging policy, explicit debug-authority bit, and
@@ -77,6 +80,8 @@ modified; ADR-003 remains reserved for Phase 1.
   `runtime/logging/runtime_logger.cpp`, Runtime options/stdio sources, root and
   Runtime CMake files.
 - Native contracts: `tests/runtime/runtime_logging_test.cpp`,
+  `tests/runtime/jsonl_test_support.hpp`,
+  `tests/runtime/runtime_late_log_failure_test.cpp`,
   `tests/runtime/stdio_runtime_test.cpp`,
   `tests/runtime/voice_runtime_smoke.cmake`, and
   `tests/runtime/mock_process_audio_no_logging.cmake`.
@@ -123,6 +128,21 @@ modified; ADR-003 remains reserved for Phase 1.
   overlong, surrogate, out-of-range, lone-continuation, and truncated sequences;
   native tests parse every JSONL line and cover escaped controls plus exact
   accepted/rejected 512-byte multibyte boundaries.
+- Re-review sink-failure RED used a real FIFO to make the file sink fail only
+  after successful initialization; spdlog's default handler emitted a
+  path-bearing `[*** LOG ERROR]` line. GREEN installs the instance-owned silent
+  handler. The real child exits deterministically, stdout still decodes as one
+  Hello frame, and every remaining stderr line passes the strict JSONL parser
+  without exposing the temporary absolute path. The POSIX fault injection runs
+  on macOS/Linux; Windows compiles the same handler and explicitly skips the
+  unavailable FIFO mechanism pending its native CI fault-injection equivalent.
+- Re-review parser tests reject trailing commas, raw control characters,
+  non-emitter escapes, short-form control aliases, and lone/paired surrogate
+  escapes. The constrained parser intentionally accepts only the complete
+  escape grammar produced by the native emitter. Exact 64-byte valid UTF-8
+  components (with a multibyte final scalar) succeed and 65-byte components
+  fail before directory creation; malformed/truncated boundaries remain
+  covered separately.
 
 ## Verification
 
@@ -133,10 +153,10 @@ modified; ADR-003 remains reserved for Phase 1.
 - `cargo test --workspace` — passed: 36 Rust unit/integration tests plus four
   doctests, 0 failed; 19 native-path/controlled-fixture tests remain
   intentionally ignored by Cargo and are exercised through CTest.
-- Debug configure/build/CTest — passed 17/17, including unified logging,
+- Debug configure/build/CTest — passed 18/18, including unified logging,
   stdout protocol isolation, real RuntimeManager child cases, hostile-child
   cases, and the Mock hot-path source guard.
-- Release configure/build/CTest — passed 17/17 with the same coverage.
+- Release configure/build/CTest — passed 18/18 with the same coverage.
 - `pnpm contracts:check` — passed; generated contracts are current.
 - `pnpm test` — passed: Node contract and doctor suites 13/13.
 - `git diff --check` and staged diff check — passed.
@@ -149,7 +169,10 @@ modified; ADR-003 remains reserved for Phase 1.
 - `9d99ac6` — `docs(logging): record task 11 evidence`
 - `0d418eb` — `fix(logging): guarantee valid UTF-8 JSONL`
 - `065a68c` — `fix(logging): enforce validated logging authority`
+- `081d4a2` — `docs(logging): record task 11 review fixes`
 - `94bc56c` — `fix(config): reject superscript device aliases`
+- `01687e7` — `docs(logging): record portable path follow-up`
+- `892b6d9` — `fix(logging): contain late native sink failures`
 
 ## Self-review and concerns
 
