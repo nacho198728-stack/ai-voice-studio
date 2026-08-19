@@ -86,9 +86,21 @@ add_test(
   COMMAND aivs_mock_pipeline_test $<TARGET_FILE:aivs_mock_voice_engine>
 )
 
+add_test(
+  NAME aivs_mock_process_audio_no_logging
+  COMMAND
+    ${CMAKE_COMMAND}
+    -DSOURCE=${PROJECT_SOURCE_DIR}/engines/mock/mock_voice_engine.cpp
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/runtime/mock_process_audio_no_logging.cmake
+)
+
 add_executable(aivs_runtime_options_test runtime/runtime_options_test.cpp)
 target_link_libraries(aivs_runtime_options_test PRIVATE ai_voice::runtime_options)
 add_test(NAME aivs_runtime_options_test COMMAND aivs_runtime_options_test)
+
+add_executable(aivs_runtime_logging_test runtime/runtime_logging_test.cpp)
+target_link_libraries(aivs_runtime_logging_test PRIVATE ai_voice::runtime_logging)
+add_test(NAME aivs_runtime_logging_test COMMAND aivs_runtime_logging_test)
 
 add_executable(aivs_runtime_session_test runtime/runtime_session_test.cpp)
 target_link_libraries(aivs_runtime_session_test PRIVATE ai_voice_runtime_session)

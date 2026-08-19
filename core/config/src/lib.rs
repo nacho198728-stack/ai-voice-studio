@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -12,6 +12,7 @@ pub const MAX_RUNTIME_IN_FLIGHT: u32 = 64;
 pub const MAX_RUNTIME_QUEUE_CAPACITY: u32 = 256;
 pub const MAX_STDERR_TAIL_BYTES: u32 = 65_536;
 pub const MAX_MOCK_WORK_ITERATIONS: u32 = 1_000_000;
+pub const MAX_DEVELOPMENT_LOG_DIRECTORY_BYTES: usize = 240;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConfigErrorKind {
@@ -89,6 +90,7 @@ struct RawMockBackendConfig {
 struct RawDebugConfig {
     enabled: bool,
     log_level: LogLevel,
+    development_log_directory: String,
 }
 
 #[derive(Deserialize)]
@@ -153,6 +155,7 @@ impl ProductConfig {
             debug: DebugConfig {
                 enabled: raw.debug.enabled,
                 log_level: raw.debug.log_level,
+                development_log_directory: PathBuf::from(&raw.debug.development_log_directory),
             },
             audio: AudioConfig {
                 enabled: raw.audio.enabled,
@@ -242,6 +245,7 @@ fn validate_raw(raw: &RawProductConfig) -> Result<(), ConfigError> {
         0,
         MAX_MOCK_WORK_ITERATIONS,
     )?;
+    validate_development_log_directory(&raw.debug.development_log_directory)?;
     if raw.audio.enabled
         || raw.audio.input_device != AudioDeviceSelection::Unconfigured
         || raw.audio.output_device != AudioDeviceSelection::Unconfigured
@@ -251,6 +255,23 @@ fn validate_raw(raw: &RawProductConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::new(
             ConfigErrorKind::Semantic,
             "audio must remain disabled and unconfigured in Phase 0.5",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_development_log_directory(value: &str) -> Result<(), ConfigError> {
+    let invalid = value.is_empty()
+        || value.len() > MAX_DEVELOPMENT_LOG_DIRECTORY_BYTES
+        || value.starts_with('/')
+        || value.contains(['\\', ':', '\0'])
+        || value
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..");
+    if invalid {
+        return Err(ConfigError::new(
+            ConfigErrorKind::Semantic,
+            "development_log_directory must be a bounded portable relative path without traversal",
         ));
     }
     Ok(())
@@ -354,6 +375,7 @@ impl MockBackendConfig {
 pub struct DebugConfig {
     enabled: bool,
     log_level: LogLevel,
+    development_log_directory: PathBuf,
 }
 
 impl DebugConfig {
@@ -363,6 +385,30 @@ impl DebugConfig {
 
     pub const fn log_level(&self) -> LogLevel {
         self.log_level
+    }
+
+    pub const fn effective_log_level(&self) -> LogLevel {
+        match (self.enabled, self.log_level) {
+            (false, LogLevel::Trace | LogLevel::Debug) => LogLevel::Info,
+            (_, level) => level,
+        }
+    }
+
+    pub fn development_log_directory(&self) -> &Path {
+        &self.development_log_directory
+    }
+
+    pub fn resolve_development_log_directory(
+        &self,
+        host_base: &Path,
+    ) -> Result<PathBuf, ConfigError> {
+        if !host_base.is_absolute() {
+            return Err(ConfigError::new(
+                ConfigErrorKind::Semantic,
+                "development log host base must be an explicit absolute path",
+            ));
+        }
+        Ok(host_base.join(&self.development_log_directory))
     }
 }
 
@@ -374,6 +420,18 @@ pub enum LogLevel {
     Info,
     Warn,
     Error,
+}
+
+impl LogLevel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trace => "trace",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

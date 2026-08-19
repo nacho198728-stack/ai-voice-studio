@@ -1,0 +1,17 @@
+[package]
+name = "ai-voice-telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tracing = "=0.1.44"
+tracing-appender = "=0.2.5"
+tracing-subscriber = { version = "=0.3.23", features = ["json", "time"] }
+
+[dev-dependencies]
+serde_json = "=1.0.143"
+
+[lints]
+workspace = true

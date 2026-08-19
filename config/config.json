@@ -18,7 +18,8 @@
   },
   "debug": {
     "enabled": false,
-    "log_level": "info"
+    "log_level": "info",
+    "development_log_directory": "logs/development"
   },
   "audio": {
     "enabled": false,

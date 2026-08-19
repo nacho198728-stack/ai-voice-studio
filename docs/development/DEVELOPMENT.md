@@ -105,6 +105,19 @@ cmake --build --preset native-debug
 ctest --preset native-debug
 ```
 
+The first native configure downloads spdlog only from its official GitHub
+repository at the immutable v1.16.0 release commit declared in the root
+`CMakeLists.txt`; CMake verifies the declared SHA-256 and never searches for a
+Homebrew/system spdlog. Subsequent builds use CMake's build-tree dependency
+cache. Release validation uses the corresponding `native-release` presets.
+
+Development logs are JSONL under the host-resolved directory configured by
+`config/config.json`. Rust writes `runtime-host.jsonl`; C++ writes
+`voice-runtime.jsonl` and mirrors records to stderr. Runtime stdout is binary
+IPC and must never be redirected into a text log. Phase 0.5 does not rotate or
+delete logs; remove old development logs manually while both processes are
+stopped.
+
 Tauri CLI is intentionally not a global prerequisite. When the desktop shell
 is introduced, its CLI will be a versioned repository dependency and invoked
 through the package manager.

@@ -13,6 +13,15 @@ home directory, environment, or platform settings folders. Runtime and plugin
 resource paths are deliberately absent from JSON: the Desktop resource owner
 passes both paths explicitly when constructing `RuntimeManagerConfig`.
 
+The same host supplies an explicit absolute writable application-data base for
+logging. `debug.development_log_directory` is validated as a bounded portable
+relative path and joined to that base; it is never resolved against cwd, home,
+an environment variable, or the executable location. Empty/dot/parent
+components, absolute or drive-qualified paths, backslashes, NUL, and oversized
+values fail validation. RuntimeHost passes the resolved absolute directory,
+effective level, and generation to `voice-runtime` as native process arguments,
+preserving Unicode through `OsStr` on Rust and `wmain` on Windows.
+
 A future user settings store must use a separate platform-owned writable
 location, schema, migration policy, and atomic-write implementation. It must not
 modify or shadow the shipped resource implicitly.
@@ -28,6 +37,13 @@ and include actionable context.
 Invalid configuration fails closed. Loading never repairs, defaults, creates,
 rewrites, migrates, or falls back to a different file. The caller decides how
 to surface an error; it must not silently continue with implicit defaults.
+
+`debug.log_level` accepts `trace`, `debug`, `info`, `warn`, and `error`. When
+`debug.enabled=false`, requested trace/debug is deterministically clamped to
+info; warn/error remain stricter. RuntimeManager validates this gate again, so
+the production launch path cannot enable verbose logging by mutating only the
+level. The telemetry initializer, not the configuration loader, creates the
+resolved development directory.
 
 ## Phase 0.5 capability truthfulness
 

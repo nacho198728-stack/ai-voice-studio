@@ -26,4 +26,5 @@ The checked-in CMake presets provide the native build baseline. Run `cmake --pre
 
 - Version: see [VERSION](VERSION).
 - License status: see [LICENSE.md](LICENSE.md).
+- Third-party notices: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - Architectural decisions: see [docs/adr](docs/adr).

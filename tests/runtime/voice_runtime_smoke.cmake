@@ -18,7 +18,25 @@ set(invalid_output "${SMOKE_DIRECTORY}/invalid-output.bin")
 set(invalid_stderr "${SMOKE_DIRECTORY}/invalid-stderr.txt")
 set(missing_output "${SMOKE_DIRECTORY}/missing-output.bin")
 set(missing_stderr "${SMOKE_DIRECTORY}/missing-stderr.txt")
+set(log_failure_output "${SMOKE_DIRECTORY}/log-failure-output.bin")
+set(log_failure_stderr "${SMOKE_DIRECTORY}/log-failure-stderr.txt")
 file(WRITE "${empty_input}" "")
+set(log_directory "${SMOKE_DIRECTORY}/logs-日志")
+file(MAKE_DIRECTORY "${log_directory}")
+
+function(assert_structured_stderr path label)
+  file(READ "${path}" content)
+  string(REGEX MATCHALL "[^\r\n]+" records "${content}")
+  list(LENGTH records record_count)
+  if(record_count EQUAL 0)
+    message(FATAL_ERROR "voice-runtime ${label} omitted structured stderr")
+  endif()
+  foreach(record IN LISTS records)
+    if(NOT record MATCHES "^\\{\"timestamp\":\"[^\"]+Z\",\"component\":\"voice-runtime\",\"level\":\"(trace|debug|info|warn|error)\",\"message\":")
+      message(FATAL_ERROR "voice-runtime ${label} stderr was not unified JSONL")
+    endif()
+  endforeach()
+endfunction()
 
 get_filename_component(mock_plugin_extension "${MOCK_PLUGIN}" EXT)
 set(unicode_plugin_directory "${SMOKE_DIRECTORY}/Unicode-声音-路径")
@@ -28,6 +46,7 @@ file(COPY_FILE "${MOCK_PLUGIN}" "${unicode_plugin}" ONLY_IF_DIFFERENT)
 
 execute_process(
   COMMAND "${VOICE_RUNTIME}"
+    --log-directory "${log_directory}" --log-level debug --generation 1
   INPUT_FILE "${empty_input}"
   OUTPUT_FILE "${eof_output}"
   ERROR_FILE "${eof_stderr}"
@@ -44,10 +63,7 @@ execute_process(
 if(NOT verify_eof_result EQUAL 0)
   message(FATAL_ERROR "voice-runtime EOF output was not protocol-clean")
 endif()
-file(SIZE "${eof_stderr}" eof_stderr_size)
-if(NOT eof_stderr_size EQUAL 0)
-  message(FATAL_ERROR "voice-runtime emitted stderr during clean EOF")
-endif()
+assert_structured_stderr("${eof_stderr}" "clean EOF")
 
 execute_process(
   COMMAND "${SMOKE_HELPER}" write-shutdown "${shutdown_input}"
@@ -58,6 +74,7 @@ if(NOT write_shutdown_result EQUAL 0)
 endif()
 execute_process(
   COMMAND "${VOICE_RUNTIME}"
+    --log-directory "${log_directory}" --log-level debug --generation 1
   INPUT_FILE "${shutdown_input}"
   OUTPUT_FILE "${shutdown_output}"
   ERROR_FILE "${shutdown_stderr}"
@@ -74,10 +91,7 @@ execute_process(
 if(NOT verify_shutdown_result EQUAL 0)
   message(FATAL_ERROR "voice-runtime shutdown output was not protocol-clean")
 endif()
-file(SIZE "${shutdown_stderr}" shutdown_stderr_size)
-if(NOT shutdown_stderr_size EQUAL 0)
-  message(FATAL_ERROR "voice-runtime emitted stderr during clean shutdown")
-endif()
+assert_structured_stderr("${shutdown_stderr}" "clean shutdown")
 
 execute_process(
   COMMAND "${SMOKE_HELPER}" write-pipeline-shutdown "${pipeline_input}"
@@ -88,6 +102,7 @@ if(NOT write_pipeline_result EQUAL 0)
 endif()
 execute_process(
   COMMAND "${VOICE_RUNTIME}" --plugin "${unicode_plugin}" --mock-work-iterations 0
+    --log-directory "${log_directory}" --log-level debug --generation 1
   INPUT_FILE "${pipeline_input}"
   OUTPUT_FILE "${pipeline_output}"
   ERROR_FILE "${pipeline_stderr}"
@@ -104,10 +119,7 @@ execute_process(
 if(NOT verify_pipeline_result EQUAL 0)
   message(FATAL_ERROR "voice-runtime mock pipeline output was not the fixed control summary")
 endif()
-file(SIZE "${pipeline_stderr}" pipeline_stderr_size)
-if(NOT pipeline_stderr_size EQUAL 0)
-  message(FATAL_ERROR "voice-runtime emitted stderr during clean mock pipeline shutdown")
-endif()
+assert_structured_stderr("${pipeline_stderr}" "mock pipeline shutdown")
 
 execute_process(
   COMMAND "${VOICE_RUNTIME}" --unknown value
@@ -130,6 +142,7 @@ get_filename_component(plugin_directory "${MOCK_PLUGIN}" DIRECTORY)
 set(missing_plugin "${plugin_directory}/missing-aivs-plugin")
 execute_process(
   COMMAND "${VOICE_RUNTIME}" --plugin "${missing_plugin}"
+    --log-directory "${log_directory}" --log-level info --generation 1
   INPUT_FILE "${empty_input}"
   OUTPUT_FILE "${missing_output}"
   ERROR_FILE "${missing_stderr}"
@@ -144,12 +157,34 @@ file(SIZE "${missing_stderr}" missing_stderr_size)
 if(NOT missing_output_size EQUAL 0 OR missing_stderr_size EQUAL 0)
   message(FATAL_ERROR "voice-runtime setup failure contaminated stdout or omitted stderr")
 endif()
+assert_structured_stderr("${missing_stderr}" "missing plugin")
+
+set(blocked_log_directory "${SMOKE_DIRECTORY}/blocked-log-directory")
+file(WRITE "${blocked_log_directory}" "not a directory")
+execute_process(
+  COMMAND "${VOICE_RUNTIME}"
+    --log-directory "${blocked_log_directory}" --log-level info --generation 1
+  INPUT_FILE "${empty_input}"
+  OUTPUT_FILE "${log_failure_output}"
+  ERROR_FILE "${log_failure_stderr}"
+  RESULT_VARIABLE log_failure_result
+  TIMEOUT 5
+)
+if(NOT log_failure_result EQUAL 4)
+  message(FATAL_ERROR "voice-runtime log initialization failure exit was not 4")
+endif()
+file(SIZE "${log_failure_output}" log_failure_output_size)
+file(SIZE "${log_failure_stderr}" log_failure_stderr_size)
+if(NOT log_failure_output_size EQUAL 0 OR log_failure_stderr_size EQUAL 0)
+  message(FATAL_ERROR "voice-runtime log initialization failure corrupted stdout or lacked diagnostics")
+endif()
 
 function(assert_plugin_setup_failure name plugin)
   set(output "${SMOKE_DIRECTORY}/${name}-output.bin")
   set(stderr "${SMOKE_DIRECTORY}/${name}-stderr.txt")
   execute_process(
     COMMAND "${VOICE_RUNTIME}" --plugin "${plugin}"
+      --log-directory "${log_directory}" --log-level info --generation 1
     INPUT_FILE "${empty_input}"
     OUTPUT_FILE "${output}"
     ERROR_FILE "${stderr}"
@@ -164,7 +199,12 @@ function(assert_plugin_setup_failure name plugin)
   if(NOT output_size EQUAL 0 OR stderr_size EQUAL 0)
     message(FATAL_ERROR "voice-runtime ${name} setup failure violated stdout/stderr boundary")
   endif()
+  assert_structured_stderr("${stderr}" "${name}")
 endfunction()
 
 assert_plugin_setup_failure("unsupported-factory" "${UNSUPPORTED_PLUGIN}")
 assert_plugin_setup_failure("initialize-failure" "${INITIALIZE_FAILURE_PLUGIN}")
+
+if(NOT EXISTS "${log_directory}/voice-runtime.jsonl")
+  message(FATAL_ERROR "voice-runtime did not write the configured JSONL log file")
+endif()

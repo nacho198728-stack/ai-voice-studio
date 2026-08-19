@@ -40,6 +40,32 @@ void diagnostic(std::ostream& output, std::string_view text) noexcept {
   }
 }
 
+void log_or_diagnostic(
+    LogSink* logging,
+    std::ostream& diagnostics,
+    LogLevel level,
+    std::string_view message,
+    LogFields fields) noexcept {
+  if (logging != nullptr) {
+    logging->log(level, message, fields);
+  } else if (level == LogLevel::Error || level == LogLevel::Warn) {
+    diagnostic(diagnostics, message);
+  }
+}
+
+class ScopedLogFlush final {
+ public:
+  explicit ScopedLogFlush(LogSink* logging) : logging_(logging) {}
+  ~ScopedLogFlush() {
+    if (logging_ != nullptr) {
+      logging_->flush();
+    }
+  }
+
+ private:
+  LogSink* logging_;
+};
+
 enum class SendResult {
   Success,
   EncodeFailure,
@@ -119,13 +145,26 @@ ProcessExitCode run_stdio(
     ByteWriter& output,
     std::ostream& diagnostics,
     std::uint64_t generation,
-    PipelineService* pipeline) noexcept {
+    PipelineService* pipeline,
+    LogSink* logging) noexcept {
+  ScopedLogFlush flush(logging);
   Session session(generation, pipeline);
   try {
+    log_or_diagnostic(
+        logging,
+        diagnostics,
+        LogLevel::Info,
+        "Runtime session starting",
+        {std::nullopt, generation});
     const auto hello = session.start();
     if (!hello.has_value()) {
       session.mark_failure(ExitReason::UnexpectedFailure);
-      diagnostic(diagnostics, "voice-runtime: could not enter running state");
+      log_or_diagnostic(
+          logging,
+          diagnostics,
+          LogLevel::Error,
+          "Runtime could not enter running state",
+          {std::nullopt, generation});
       return ProcessExitCode::UnexpectedFailure;
     }
     const auto hello_result = send(output, *hello);
@@ -136,7 +175,12 @@ ProcessExitCode run_stdio(
       session.mark_failure(
           exit == ProcessExitCode::OutputFailure ? ExitReason::OutputFailure
                                                  : ExitReason::UnexpectedFailure);
-      diagnostic(diagnostics, "voice-runtime: startup frame write failed");
+      log_or_diagnostic(
+          logging,
+          diagnostics,
+          LogLevel::Error,
+          "Runtime startup frame write failed",
+          {std::nullopt, generation});
       return exit;
     }
 
@@ -148,16 +192,32 @@ ProcessExitCode run_stdio(
           (read.status == ReadStatus::Data && (read.size == 0U || read.size > buffer.size())) ||
           (read.status != ReadStatus::Data && read.size != 0U)) {
         session.mark_failure(ExitReason::UnexpectedFailure);
-        diagnostic(diagnostics, "voice-runtime: stdin read failed");
+        log_or_diagnostic(
+            logging,
+            diagnostics,
+            LogLevel::Error,
+            "Runtime stdin read failed",
+            {std::nullopt, generation});
         return ProcessExitCode::UnexpectedFailure;
       }
       if (read.status == ReadStatus::Eof) {
         if (decoder.finish().has_value()) {
           session.mark_failure(ExitReason::ProtocolFailure);
-          diagnostic(diagnostics, "voice-runtime: malformed or truncated input frame");
+          log_or_diagnostic(
+              logging,
+              diagnostics,
+              LogLevel::Warn,
+              "Runtime received malformed or truncated input frame",
+              {std::nullopt, generation});
           return ProcessExitCode::ProtocolFailure;
         }
         session.mark_clean_eof();
+        log_or_diagnostic(
+            logging,
+            diagnostics,
+            LogLevel::Info,
+            "Runtime stdin reached clean EOF",
+            {std::nullopt, generation});
         return ProcessExitCode::Success;
       }
 
@@ -165,18 +225,39 @@ ProcessExitCode run_stdio(
       if (decoded.error.has_value()) {
         if (decoded.error->kind == message::FrameErrorKind::AllocationFailure) {
           session.mark_failure(ExitReason::UnexpectedFailure);
-          diagnostic(diagnostics, "voice-runtime: decoder allocation failed");
+          log_or_diagnostic(
+              logging,
+              diagnostics,
+              LogLevel::Error,
+              "Runtime decoder allocation failed",
+              {std::nullopt, generation});
           return ProcessExitCode::UnexpectedFailure;
         }
         session.mark_failure(ExitReason::ProtocolFailure);
-        diagnostic(diagnostics, "voice-runtime: malformed, oversized, or unsupported input frame");
+        log_or_diagnostic(
+            logging,
+            diagnostics,
+            LogLevel::Warn,
+            "Runtime received malformed, oversized, or unsupported input frame",
+            {std::nullopt, generation});
         return ProcessExitCode::ProtocolFailure;
       }
       for (const auto& inbound : decoded.messages) {
+        log_or_diagnostic(
+            logging,
+            diagnostics,
+            LogLevel::Debug,
+            "Runtime request received",
+            {inbound.request_id, generation});
         const auto dispatched = session.handle(inbound);
         if (dispatched.disposition == DispatchDisposition::ProtocolFailure ||
             !dispatched.response.has_value()) {
-          diagnostic(diagnostics, "voice-runtime: invalid inbound message direction");
+          log_or_diagnostic(
+              logging,
+              diagnostics,
+              LogLevel::Warn,
+              "Runtime received invalid inbound message direction",
+              {inbound.request_id, generation});
           return ProcessExitCode::ProtocolFailure;
         }
         const auto response_result = send(output, *dispatched.response);
@@ -187,18 +268,34 @@ ProcessExitCode run_stdio(
           session.mark_failure(
               exit == ProcessExitCode::OutputFailure ? ExitReason::OutputFailure
                                                      : ExitReason::UnexpectedFailure);
-          diagnostic(diagnostics, "voice-runtime: response frame write failed");
+          log_or_diagnostic(
+              logging,
+              diagnostics,
+              LogLevel::Error,
+              "Runtime response frame write failed",
+              {inbound.request_id, generation});
           return exit;
         }
         if (dispatched.disposition == DispatchDisposition::StopAfterResponse) {
           session.mark_shutdown_response_written();
+          log_or_diagnostic(
+              logging,
+              diagnostics,
+              LogLevel::Info,
+              "Runtime shutdown completed",
+              {inbound.request_id, generation});
           return ProcessExitCode::Success;
         }
       }
     }
   } catch (...) {
     session.mark_failure(ExitReason::UnexpectedFailure);
-    diagnostic(diagnostics, "voice-runtime: unexpected exception");
+    log_or_diagnostic(
+        logging,
+        diagnostics,
+        LogLevel::Error,
+        "Runtime stopped after an unexpected exception",
+        {std::nullopt, generation});
     return ProcessExitCode::UnexpectedFailure;
   }
 }
@@ -212,26 +309,52 @@ ProcessExitCode run_native_with_options(RuntimeOptionsParseResult parsed) noexce
       diagnostic(std::cerr, parsed.diagnostic);
       return ProcessExitCode::UnexpectedFailure;
     }
+    auto initialized = RuntimeLogger::initialize({
+        parsed.options->log_directory,
+        parsed.options->log_level,
+        "voice-runtime",
+        parsed.options->generation,
+    });
+    if (!initialized.logger) {
+      diagnostic(std::cerr, initialized.diagnostic);
+      return ProcessExitCode::UnexpectedFailure;
+    }
+    initialized.logger->log(
+        LogLevel::Info,
+        "Runtime process initializing",
+        {std::nullopt, parsed.options->generation});
     if (parsed.options->plugin_path.has_value()) {
       auto created = MockPipeline::create(
           *parsed.options->plugin_path, parsed.options->mock_work_iterations);
       if (created.error_code != contracts::ErrorCode::Success || !created.pipeline) {
-        diagnostic(std::cerr, created.diagnostic);
+        initialized.logger->log(
+            LogLevel::Error,
+            "Mock pipeline initialization failed",
+            {std::nullopt, parsed.options->generation});
         return ProcessExitCode::UnexpectedFailure;
       }
       pipeline = std::move(created.pipeline);
     }
+    if (!configure_native_stdio()) {
+      initialized.logger->log(
+          LogLevel::Error,
+          "Runtime stdio configuration failed",
+          {std::nullopt, parsed.options->generation});
+      return ProcessExitCode::UnexpectedFailure;
+    }
+    NativeStdinReader input;
+    NativeStdoutWriter output;
+    return run_stdio(
+        input,
+        output,
+        std::cerr,
+        1U,
+        pipeline.get(),
+        initialized.logger.get());
   } catch (...) {
     diagnostic(std::cerr, "voice-runtime: setup failed unexpectedly");
     return ProcessExitCode::UnexpectedFailure;
   }
-  if (!configure_native_stdio()) {
-    diagnostic(std::cerr, "voice-runtime: stdio configuration failed");
-    return ProcessExitCode::UnexpectedFailure;
-  }
-  NativeStdinReader input;
-  NativeStdoutWriter output;
-  return run_stdio(input, output, std::cerr, 1U, pipeline.get());
 }
 
 template <typename Character>

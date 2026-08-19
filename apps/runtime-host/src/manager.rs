@@ -11,13 +11,14 @@ use ai_voice_capability::{
     NativeRuntimeCapabilities, Platform, RuntimeBackend,
 };
 use ai_voice_config::{
-    BackendKind, MAX_MOCK_WORK_ITERATIONS, MAX_RUNTIME_IN_FLIGHT, MAX_RUNTIME_QUEUE_CAPACITY,
-    MAX_RUNTIME_TIMEOUT_MS, MAX_STDERR_TAIL_BYTES, ProductConfig,
+    BackendKind, LogLevel, MAX_MOCK_WORK_ITERATIONS, MAX_RUNTIME_IN_FLIGHT,
+    MAX_RUNTIME_QUEUE_CAPACITY, MAX_RUNTIME_TIMEOUT_MS, MAX_STDERR_TAIL_BYTES, ProductConfig,
 };
 use ai_voice_contracts::runtime_message::{
     Command, Decoder, MAX_PING_PAYLOAD_BYTES, MessageKind, RuntimeMessage, encode,
 };
 use ai_voice_contracts::{ErrorCode, IPC_PROTOCOL_CURRENT_VERSION, RUNTIME_VERSION};
+use ai_voice_telemetry::{EventFields, Level as TelemetryLevel, emit as emit_telemetry};
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin};
@@ -37,6 +38,24 @@ const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 const MAX_PIPE_DRAIN_EVENTS: usize = 64;
 const REAP_TIMEOUT: Duration = Duration::from_secs(2);
+const TELEMETRY_COMPONENT: &str = "runtime-host";
+
+fn telemetry(
+    level: TelemetryLevel,
+    message: &str,
+    request_id: Option<u64>,
+    generation: Option<u64>,
+) {
+    emit_telemetry(
+        level,
+        TELEMETRY_COMPONENT,
+        message,
+        EventFields {
+            request_id,
+            generation,
+        },
+    );
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeState {
@@ -525,10 +544,17 @@ pub struct RuntimeManagerConfig {
     pub event_queue_capacity: usize,
     pub stderr_tail_bytes: usize,
     pub restart_max_attempts: u32,
+    pub log_directory: PathBuf,
+    pub log_level: LogLevel,
+    debug_enabled: bool,
 }
 
 impl RuntimeManagerConfig {
     pub fn new(runtime_path: PathBuf, plugin_path: PathBuf) -> Self {
+        let log_directory = runtime_path
+            .parent()
+            .unwrap_or(runtime_path.as_path())
+            .join("logs");
         Self {
             runtime_path,
             plugin_path,
@@ -541,6 +567,9 @@ impl RuntimeManagerConfig {
             event_queue_capacity: 32,
             stderr_tail_bytes: 8_192,
             restart_max_attempts: 0,
+            log_directory,
+            log_level: LogLevel::Info,
+            debug_enabled: false,
         }
     }
 
@@ -548,6 +577,7 @@ impl RuntimeManagerConfig {
         product: &ProductConfig,
         runtime_path: PathBuf,
         plugin_path: PathBuf,
+        development_base: PathBuf,
     ) -> Result<Self, ManagerError> {
         let mock_work_iterations = match product.backend().kind() {
             BackendKind::Mock => product.backend().mock().work_iterations(),
@@ -570,6 +600,16 @@ impl RuntimeManagerConfig {
             event_queue_capacity: product.runtime().event_queue_capacity() as usize,
             stderr_tail_bytes: product.runtime().stderr_tail_bytes() as usize,
             restart_max_attempts: product.runtime().restart_max_attempts(),
+            log_directory: product
+                .debug()
+                .resolve_development_log_directory(&development_base)
+                .map_err(|error| {
+                    ManagerError::invalid_configuration(format!(
+                        "development log directory is invalid: {error}"
+                    ))
+                })?,
+            log_level: product.debug().effective_log_level(),
+            debug_enabled: product.debug().enabled(),
         };
         config.validate()?;
         Ok(config)
@@ -593,6 +633,12 @@ impl RuntimeManagerConfig {
     fn validate(&self) -> Result<(), ManagerError> {
         validate_path(&self.runtime_path, "Runtime")?;
         validate_path(&self.plugin_path, "plugin")?;
+        validate_path(&self.log_directory, "log directory")?;
+        if !self.debug_enabled && matches!(self.log_level, LogLevel::Trace | LogLevel::Debug) {
+            return Err(ManagerError::invalid_configuration(
+                "trace and debug logging require debug.enabled=true",
+            ));
+        }
         if self.mock_work_iterations > MAX_MOCK_WORK_ITERATIONS {
             return Err(ManagerError::invalid_configuration(
                 "mock work iterations exceed the fixed limit",
@@ -1378,6 +1424,12 @@ impl Actor {
             let _ = reply.send(Err(error));
             return;
         }
+        telemetry(
+            TelemetryLevel::Info,
+            "Runtime start requested",
+            None,
+            Some(generation),
+        );
         match spawn_process(&self.config, generation, self.event_tx.clone()) {
             Ok(process) => {
                 self.state.pid = process.child.id();
@@ -1388,6 +1440,12 @@ impl Actor {
                 });
             }
             Err(error) => {
+                telemetry(
+                    TelemetryLevel::Error,
+                    "Runtime process spawn failed",
+                    None,
+                    Some(generation),
+                );
                 self.state.failed(error.clone());
                 let _ = reply.send(Err(error));
             }
@@ -1480,6 +1538,12 @@ impl Actor {
             stdout_eof: false,
             reply,
         });
+        telemetry(
+            TelemetryLevel::Info,
+            "Runtime shutdown requested",
+            Some(request_id),
+            Some(self.state.generation),
+        );
         if let Err(error) = self.queue_frame(request_id, frame) {
             self.fail_stream(error, RuntimeExitReason::ProcessFailure)
                 .await;
@@ -1571,6 +1635,12 @@ impl Actor {
                 reply,
             )
             .expect("pending capacity and fresh monotonic ID were checked");
+        telemetry(
+            TelemetryLevel::Debug,
+            "Runtime request queued",
+            Some(request_id),
+            Some(self.state.generation),
+        );
         if let Err(error) = self.queue_frame(request_id, frame) {
             let pending = self.pending.take(request_id);
             self.fail_stream_deferred(error, RuntimeExitReason::ProcessFailure, None, pending)
@@ -1671,6 +1741,12 @@ impl Actor {
                 return;
             };
             self.state.connected(pid, hello);
+            telemetry(
+                TelemetryLevel::Info,
+                "Runtime handshake completed",
+                None,
+                Some(generation),
+            );
             if let Some(start) = self.start.take() {
                 let _ = start.reply.send(Ok(self.status().await));
             }
@@ -1684,6 +1760,12 @@ impl Actor {
             .await;
             return;
         }
+        telemetry(
+            TelemetryLevel::Debug,
+            "Runtime response received",
+            Some(message.request_id),
+            Some(generation),
+        );
         if self
             .stop
             .as_ref()
@@ -1876,6 +1958,12 @@ impl Actor {
             .reap_process(RuntimeExitReason::RequestedShutdown, false)
             .await;
         self.state.stopped(exit);
+        telemetry(
+            TelemetryLevel::Info,
+            "Runtime shutdown completed",
+            Some(stop.request_id),
+            Some(self.state.generation),
+        );
         self.pending.fail_all(ManagerError::unavailable(
             "Runtime stopped before request completion",
         ));
@@ -1893,6 +1981,12 @@ impl Actor {
         extra_stop: Option<StatusReply>,
         primary: Option<PendingRequest>,
     ) {
+        telemetry(
+            TelemetryLevel::Error,
+            "Runtime stream failed",
+            None,
+            Some(self.state.generation),
+        );
         let start = self.start.take();
         let stop = self.stop.take();
         let has_primary = primary.is_some();
@@ -1920,6 +2014,12 @@ impl Actor {
     }
 
     async fn crash_stream(&mut self, error: ManagerError) {
+        telemetry(
+            TelemetryLevel::Error,
+            "Runtime process exited unexpectedly",
+            None,
+            Some(self.state.generation),
+        );
         let start = self.start.take();
         let stop = self.stop.take();
         let exit = self
@@ -2022,6 +2122,12 @@ impl Actor {
     }
 
     async fn manager_dropped(&mut self) {
+        telemetry(
+            TelemetryLevel::Warn,
+            "Runtime manager dropped",
+            None,
+            Some(self.state.generation),
+        );
         let error = ManagerError::unavailable("RuntimeManager was dropped");
         let start = self.start.take();
         let stop = self.stop.take();
@@ -2049,6 +2155,12 @@ fn spawn_process(
         .arg(&config.plugin_path)
         .arg("--mock-work-iterations")
         .arg(config.mock_work_iterations.to_string())
+        .arg("--log-directory")
+        .arg(&config.log_directory)
+        .arg("--log-level")
+        .arg(config.log_level.as_str())
+        .arg("--generation")
+        .arg(generation.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2717,6 +2829,13 @@ mod tests {
         );
         no_pending.max_in_flight = 0;
         assert!(no_pending.validate().is_err());
+
+        let mut gated_debug = RuntimeManagerConfig::new(
+            PathBuf::from("/tmp/voice-runtime"),
+            PathBuf::from("/tmp/mock-engine"),
+        );
+        gated_debug.log_level = LogLevel::Debug;
+        assert!(gated_debug.validate().is_err());
     }
 
     #[cfg(unix)]

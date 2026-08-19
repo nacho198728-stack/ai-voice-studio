@@ -154,6 +154,27 @@ class AllocationFailurePipeline final : public runtime::PipelineService {
   }
 };
 
+struct CapturedLog {
+  runtime::LogLevel level;
+  std::string message;
+  runtime::LogFields fields;
+};
+
+class CapturingLogSink final : public runtime::LogSink {
+ public:
+  void log(
+      runtime::LogLevel level,
+      std::string_view message,
+      runtime::LogFields fields) noexcept override {
+    logs.push_back({level, std::string(message), fields});
+  }
+
+  void flush() noexcept override { ++flush_count; }
+
+  std::vector<CapturedLog> logs;
+  std::size_t flush_count{0U};
+};
+
 message::RuntimeMessage request(
     std::uint64_t request_id,
     message::Command command,
@@ -239,6 +260,31 @@ void partial_reads_and_sticky_commands_stop_after_flushed_shutdown() {
                       }));
   assert(output.flush_count == 3U);
   assert(diagnostics.str().empty());
+}
+
+void lifecycle_and_request_logs_are_injected_without_entering_protocol_output() {
+  auto input_bytes = encode_frame(request(21U, message::Command::Ping, {'x'}));
+  const auto shutdown = encode_frame(request(22U, message::Command::Shutdown));
+  input_bytes.insert(input_bytes.end(), shutdown.begin(), shutdown.end());
+  MemoryReader input(std::move(input_bytes));
+  MemoryWriter output;
+  std::ostringstream emergency_diagnostics;
+  CapturingLogSink logging;
+
+  assert(runtime::run_stdio(
+             input, output, emergency_diagnostics, 8U, nullptr, &logging) ==
+         runtime::ProcessExitCode::Success);
+  assert(decode_all(output.output).size() == 3U);
+  assert(emergency_diagnostics.str().empty());
+  assert(logging.logs.size() >= 4U);
+  assert(logging.logs.front().fields.generation == 8U);
+  const auto correlated = std::find_if(
+      logging.logs.begin(), logging.logs.end(), [](const CapturedLog& record) {
+        return record.fields.request_id == 21U && record.fields.generation == 8U;
+      });
+  assert(correlated != logging.logs.end());
+  assert(correlated->level == runtime::LogLevel::Debug);
+  assert(logging.flush_count == 1U);
 }
 
 void truncated_or_wrong_direction_input_is_a_protocol_exit_without_stdout_diagnostics() {
@@ -337,6 +383,7 @@ void pipeline_dispatch_allocation_failure_stops_after_the_valid_hello() {
 int main() {
   clean_eof_writes_only_one_flushed_hello();
   partial_reads_and_sticky_commands_stop_after_flushed_shutdown();
+  lifecycle_and_request_logs_are_injected_without_entering_protocol_output();
   truncated_or_wrong_direction_input_is_a_protocol_exit_without_stdout_diagnostics();
   stdout_failure_and_input_failure_have_distinct_exits();
   transport_splits_more_than_one_codec_batch_without_rejecting_valid_sticky_frames();

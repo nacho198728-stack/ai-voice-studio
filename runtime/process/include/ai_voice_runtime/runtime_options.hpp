@@ -8,6 +8,8 @@
 #include <string>
 #include <string_view>
 
+#include <ai_voice_runtime/logging.hpp>
+
 namespace ai_voice::runtime {
 
 inline constexpr std::size_t kMaximumRuntimeOptionDiagnosticBytes = 256U;
@@ -15,6 +17,9 @@ inline constexpr std::size_t kMaximumRuntimeOptionDiagnosticBytes = 256U;
 struct RuntimeOptions {
   std::optional<std::filesystem::path> plugin_path;
   std::uint32_t mock_work_iterations{0U};
+  std::filesystem::path log_directory;
+  LogLevel log_level{LogLevel::Info};
+  std::uint64_t generation{0U};
 };
 
 struct RuntimeOptionsParseResult {

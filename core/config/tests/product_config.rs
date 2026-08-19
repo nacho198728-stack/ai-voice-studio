@@ -19,7 +19,11 @@ const VALID: &str = r#"{
     "restart_max_attempts": 0
   },
   "backend": { "kind": "mock", "mock": { "work_iterations": 0 } },
-  "debug": { "enabled": false, "log_level": "info" },
+  "debug": {
+    "enabled": false,
+    "log_level": "info",
+    "development_log_directory": "logs/development"
+  },
   "audio": {
     "enabled": false,
     "input_device": "unconfigured",
@@ -51,6 +55,11 @@ fn checked_in_default_is_the_exact_validated_development_contract() {
     assert_eq!(config.backend().mock().work_iterations(), 0);
     assert!(!config.debug().enabled());
     assert_eq!(config.debug().log_level(), LogLevel::Info);
+    assert_eq!(config.debug().effective_log_level(), LogLevel::Info);
+    assert_eq!(
+        config.debug().development_log_directory().to_str(),
+        Some("logs/development")
+    );
     assert!(!config.audio().enabled());
     assert_eq!(
         config.audio().input_device(),
@@ -77,7 +86,7 @@ fn structural_errors_are_rejected_instead_of_defaulted_or_ignored() {
         (
             "missing",
             VALID.replace(
-                "\"debug\": { \"enabled\": false, \"log_level\": \"info\" },",
+                "\"debug\": {\n    \"enabled\": false,\n    \"log_level\": \"info\",\n    \"development_log_directory\": \"logs/development\"\n  },",
                 "",
             ),
         ),
@@ -109,6 +118,70 @@ fn structural_errors_are_rejected_instead_of_defaulted_or_ignored() {
         assert_eq!(error.kind(), ConfigErrorKind::InvalidDocument, "{name}");
         assert!(!error.to_string().is_empty(), "{name} must be actionable");
     }
+}
+
+#[test]
+fn debug_gate_and_portable_development_log_path_are_enforced() {
+    for requested in ["trace", "debug"] {
+        let text = VALID.replace(
+            "\"log_level\": \"info\"",
+            &format!("\"log_level\": \"{requested}\""),
+        );
+        let config = parse(&text).unwrap();
+        assert_eq!(config.debug().effective_log_level(), LogLevel::Info);
+    }
+
+    let enabled = VALID
+        .replace(
+            "\"debug\": {\n    \"enabled\": false",
+            "\"debug\": {\n    \"enabled\": true",
+        )
+        .replace("\"log_level\": \"info\"", "\"log_level\": \"trace\"");
+    assert_eq!(
+        parse(&enabled).unwrap().debug().effective_log_level(),
+        LogLevel::Trace
+    );
+
+    for invalid in [
+        "",
+        ".",
+        "..",
+        "../logs",
+        "logs/../escape",
+        "/absolute/logs",
+        "C:/absolute/logs",
+        r"C:\absolute\logs",
+        r"logs\windows",
+        "logs//empty",
+        "logs/./dot",
+    ] {
+        let text = VALID.replace(
+            "\"development_log_directory\": \"logs/development\"",
+            &format!("\"development_log_directory\": {invalid:?}"),
+        );
+        let error = parse(&text).expect_err(invalid);
+        assert_eq!(error.kind(), ConfigErrorKind::Semantic, "{invalid}");
+    }
+    let overlong = "x".repeat(ai_voice_config::MAX_DEVELOPMENT_LOG_DIRECTORY_BYTES + 1);
+    let text = VALID.replace("logs/development", &overlong);
+    assert_eq!(parse(&text).unwrap_err().kind(), ConfigErrorKind::Semantic);
+
+    let unicode = VALID.replace("logs/development", "日志/开发-🎵");
+    let config = parse(&unicode).unwrap();
+    let base = std::env::current_dir().unwrap();
+    assert_eq!(
+        config
+            .debug()
+            .resolve_development_log_directory(&base)
+            .unwrap(),
+        base.join("日志").join("开发-🎵")
+    );
+    assert!(
+        config
+            .debug()
+            .resolve_development_log_directory(PathBuf::from("relative").as_path())
+            .is_err()
+    );
 }
 
 #[test]

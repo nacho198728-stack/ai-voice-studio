@@ -36,6 +36,21 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/$<CONFIG>")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/$<CONFIG>")
 
 include(CTest)
+include(FetchContent)
+
+# Official spdlog v1.16.0 release commit, pinned by immutable commit ID and
+# archive integrity. Never fall back to an ambient system package.
+set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
+set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  spdlog
+  URL https://github.com/gabime/spdlog/archive/486b55554f11c9cccc913e11a87085b2a91f706f.tar.gz
+  URL_HASH SHA256=d2fef585c9879dd239dc498e2e8a1e22982b3ed67b2d14e78622b7ef25bdfdfa
+  DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+)
+FetchContent_MakeAvailable(spdlog)
 
 # These ownership areas deliberately contain no targets yet. Future native
 # targets attach here without changing the root build graph.

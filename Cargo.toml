@@ -4,6 +4,7 @@ members = [
   "core/capability",
   "core/config",
   "core/contracts",
+  "core/telemetry",
 ]
 resolver = "3"
 

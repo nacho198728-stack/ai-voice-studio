@@ -120,11 +120,54 @@ std::optional<std::uint32_t> parse_work_iterations(
 }
 
 template <typename Character>
+std::optional<std::uint64_t> parse_generation(
+    std::basic_string_view<Character> value) noexcept {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  std::uint64_t parsed = 0U;
+  for (const auto character : value) {
+    if (character < static_cast<Character>('0') || character > static_cast<Character>('9')) {
+      return std::nullopt;
+    }
+    const auto digit = static_cast<std::uint64_t>(character - static_cast<Character>('0'));
+    if (parsed > (std::numeric_limits<std::uint64_t>::max() - digit) / 10U) {
+      return std::nullopt;
+    }
+    parsed = parsed * 10U + digit;
+  }
+  return parsed == 0U ? std::nullopt : std::optional<std::uint64_t>(parsed);
+}
+
+template <typename Character>
+std::optional<LogLevel> parse_level(std::basic_string_view<Character> value) noexcept {
+  if (equals_ascii(value, "trace")) {
+    return LogLevel::Trace;
+  }
+  if (equals_ascii(value, "debug")) {
+    return LogLevel::Debug;
+  }
+  if (equals_ascii(value, "info")) {
+    return LogLevel::Info;
+  }
+  if (equals_ascii(value, "warn")) {
+    return LogLevel::Warn;
+  }
+  if (equals_ascii(value, "error")) {
+    return LogLevel::Error;
+  }
+  return std::nullopt;
+}
+
+template <typename Character>
 RuntimeOptionsParseResult parse_options(
     std::span<const std::basic_string_view<Character>> arguments) {
   RuntimeOptions options;
   bool plugin_seen = false;
   bool work_seen = false;
+  bool log_directory_seen = false;
+  bool log_level_seen = false;
+  bool generation_seen = false;
   for (std::size_t index = 0U; index < arguments.size();) {
     const auto option = arguments[index++];
     if (contains_nul(option)) {
@@ -162,10 +205,62 @@ RuntimeOptionsParseResult parse_options(
       options.mock_work_iterations = *parsed;
       continue;
     }
+    if (equals_ascii(option, "--log-directory")) {
+      if (log_directory_seen || index == arguments.size()) {
+        return failure("--log-directory must appear once with an absolute path value");
+      }
+      log_directory_seen = true;
+      const auto value = arguments[index++];
+      if (value.empty() || value.size() > kMaximumPluginPathCharacters || contains_nul(value)) {
+        return failure("--log-directory is empty, contains NUL, or exceeds the fixed limit");
+      }
+      const auto path = make_path(value);
+      if (!path.has_value() || !path->is_absolute()) {
+        return failure("--log-directory requires a valid explicit absolute Unicode path");
+      }
+      options.log_directory = *path;
+      continue;
+    }
+    if (equals_ascii(option, "--log-level")) {
+      if (log_level_seen || index == arguments.size()) {
+        return failure("--log-level must appear once with a supported value");
+      }
+      log_level_seen = true;
+      const auto value = arguments[index++];
+      if (contains_nul(value)) {
+        return failure("--log-level contains embedded NUL");
+      }
+      const auto parsed = parse_level(value);
+      if (!parsed.has_value()) {
+        return failure("--log-level must be trace, debug, info, warn, or error");
+      }
+      options.log_level = *parsed;
+      continue;
+    }
+    if (equals_ascii(option, "--generation")) {
+      if (generation_seen || index == arguments.size()) {
+        return failure("--generation must appear once with a nonzero unsigned value");
+      }
+      generation_seen = true;
+      const auto value = arguments[index++];
+      if (contains_nul(value)) {
+        return failure("--generation contains embedded NUL");
+      }
+      const auto parsed = parse_generation(value);
+      if (!parsed.has_value()) {
+        return failure("--generation is not a nonzero unsigned decimal value");
+      }
+      options.generation = *parsed;
+      continue;
+    }
     return failure("unknown voice-runtime command-line option");
   }
   if (work_seen && !plugin_seen) {
     return failure("--mock-work-iterations requires --plugin");
+  }
+  if (!log_directory_seen || !log_level_seen || !generation_seen) {
+    return failure(
+        "--log-directory, --log-level, and --generation are required explicit inputs");
   }
   return {std::move(options), {}};
 }

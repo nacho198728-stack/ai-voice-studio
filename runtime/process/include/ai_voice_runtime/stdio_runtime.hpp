@@ -6,6 +6,7 @@
 #include <span>
 
 #include <ai_voice_contracts/runtime_message_generated.hpp>
+#include <ai_voice_runtime/logging.hpp>
 
 namespace ai_voice::runtime {
 
@@ -51,7 +52,8 @@ enum class ProcessExitCode : int {
     ByteWriter& output,
     std::ostream& diagnostics,
     std::uint64_t generation,
-    PipelineService* pipeline = nullptr) noexcept;
+    PipelineService* pipeline = nullptr,
+    LogSink* logging = nullptr) noexcept;
 
 [[nodiscard]] ProcessExitCode run_native_stdio(int argc, char** argv) noexcept;
 [[nodiscard]] ProcessExitCode run_native_stdio(int argc, wchar_t** argv) noexcept;

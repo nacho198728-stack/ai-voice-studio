@@ -53,7 +53,23 @@ target_include_directories(
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/process/include"
 )
-target_link_libraries(ai_voice_runtime_options PUBLIC ai_voice::mock_pipeline)
+target_link_libraries(
+  ai_voice_runtime_options
+  PUBLIC ai_voice::mock_pipeline ai_voice::runtime_logging
+)
+
+add_library(ai_voice_runtime_logging STATIC logging/runtime_logger.cpp)
+add_library(ai_voice::runtime_logging ALIAS ai_voice_runtime_logging)
+target_include_directories(
+  ai_voice_runtime_logging
+  PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/logging/include"
+)
+target_link_libraries(ai_voice_runtime_logging PRIVATE spdlog::spdlog)
+if(WIN32)
+  target_compile_definitions(ai_voice_runtime_logging PRIVATE SPDLOG_WCHAR_FILENAMES)
+  target_compile_definitions(spdlog PUBLIC SPDLOG_WCHAR_FILENAMES)
+endif()
 
 add_library(ai_voice_runtime_stdio STATIC process/stdio_runtime.cpp)
 add_library(ai_voice::runtime_stdio ALIAS ai_voice_runtime_stdio)
@@ -64,7 +80,7 @@ target_include_directories(
 )
 target_link_libraries(
   ai_voice_runtime_stdio
-  PUBLIC ai_voice::runtime_session
+  PUBLIC ai_voice::runtime_session ai_voice::runtime_logging
   PRIVATE ai_voice::mock_pipeline ai_voice::runtime_options
 )
 
