@@ -32,7 +32,7 @@
 
 - [x] 建立 pnpm 与 Cargo workspace。`pnpm-workspace.yaml` 和 `package.json` 管理 Desktop 与统一开发命令；根 `Cargo.toml` 管理 Tauri backend、`apps/runtime-host` 和 Rust contracts，且不复制 CMake 内部逻辑。
 
-- [ ] 建立 CMake 工程与 presets。根 `CMakeLists.txt` 和 `CMakePresets.json` 管理 C++ Runtime、C ABI、Mock Engine 与 CTest，并定义跨平台产物目录。
+- [x] 建立 CMake 工程与 presets。根 `CMakeLists.txt` 和 `CMakePresets.json` 管理 C++ Runtime、C ABI、Mock Engine 与 CTest，并定义跨平台产物目录。
 
 - [ ] 固定工具链与开发环境契约。声明支持的 Node、pnpm、Rust stable、CMake、C++20、Xcode 和 Visual Studio 版本，提供只检查不修改机器的 doctor 脚本，并在开发文档中分别给出 macOS 与 Windows 的官方安装来源。受影响路径包括 `.node-version`、`rust-toolchain.toml`、`tools/scripts` 和 `docs/development/DEVELOPMENT.md`。这样可以避免开发者依赖当前机器的隐式路径或全局 Tauri CLI。
 
