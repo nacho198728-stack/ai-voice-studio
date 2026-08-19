@@ -1,0 +1,20 @@
+.DS_Store
+.superpowers/
+
+# Build outputs
+build/
+dist/
+target/
+node_modules/
+
+# Local logs and runtime state
+*.log
+logs/
+.runtime/
+
+# IDE and local environment
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
