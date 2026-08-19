@@ -34,7 +34,7 @@
 
 - [x] 建立 CMake 工程与 presets。根 `CMakeLists.txt` 和 `CMakePresets.json` 管理 C++ Runtime、C ABI、Mock Engine 与 CTest，并定义跨平台产物目录。
 
-- [ ] 固定工具链与开发环境契约。声明支持的 Node、pnpm、Rust stable、CMake、C++20、Xcode 和 Visual Studio 版本，提供只检查不修改机器的 doctor 脚本，并在开发文档中分别给出 macOS 与 Windows 的官方安装来源。受影响路径包括 `.node-version`、`rust-toolchain.toml`、`tools/scripts` 和 `docs/development/DEVELOPMENT.md`。这样可以避免开发者依赖当前机器的隐式路径或全局 Tauri CLI。
+- [x] 固定工具链与开发环境契约。声明支持的 Node、pnpm、Rust stable、CMake、C++20、Xcode 和 Visual Studio 版本，提供只检查不修改机器的 doctor 脚本，并在开发文档中分别给出 macOS 与 Windows 的官方安装来源。受影响路径包括 `.node-version`、`rust-toolchain.toml`、`tools/scripts` 和 `docs/development/DEVELOPMENT.md`。这样可以避免开发者依赖当前机器的隐式路径或全局 Tauri CLI。
 
 - [ ] 定义跨语言版本与 ErrorCode。`core/contracts/version.json` 记录 Runtime、protocol、VoiceEngine ABI 和兼容规则；`error-codes.json` 固定错误名称、数值和语义，再映射到 Rust/C++ 类型并检测漂移。
 
