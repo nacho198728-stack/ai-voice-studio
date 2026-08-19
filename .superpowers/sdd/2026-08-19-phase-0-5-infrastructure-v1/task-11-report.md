@@ -134,8 +134,9 @@ modified; ADR-003 remains reserved for Phase 1.
   handler. The real child exits deterministically, stdout still decodes as one
   Hello frame, and every remaining stderr line passes the strict JSONL parser
   without exposing the temporary absolute path. The POSIX fault injection runs
-  on macOS/Linux; Windows compiles the same handler and explicitly skips the
-  unavailable FIFO mechanism pending its native CI fault-injection equivalent.
+  on macOS/Linux; Windows compiles the same handler and CTest marks the
+  unavailable FIFO mechanism skipped via return code 77 pending its native CI
+  fault-injection equivalent.
 - Re-review parser tests reject trailing commas, raw control characters,
   non-emitter escapes, short-form control aliases, and lone/paired surrogate
   escapes. The constrained parser intentionally accepts only the complete
@@ -173,6 +174,7 @@ modified; ADR-003 remains reserved for Phase 1.
 - `94bc56c` — `fix(config): reject superscript device aliases`
 - `01687e7` — `docs(logging): record portable path follow-up`
 - `892b6d9` — `fix(logging): contain late native sink failures`
+- `b2b6278` — `test(logging): mark Windows FIFO case skipped`
 
 ## Self-review and concerns
 
