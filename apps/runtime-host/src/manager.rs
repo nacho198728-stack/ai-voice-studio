@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai_voice_capability::{
-    CapabilityObservation, CapabilityProfile, CapabilityProfileError, ManagerCapability,
-    ManagerHealth, ObservedRuntimeCapabilities, RuntimeBackend,
+    CapabilityEvaluation, CapabilityProfile, CapabilityProfileError, ManagerCapability,
+    ManagerHealth, NativeRuntimeCapabilities, RuntimeBackend,
 };
 use ai_voice_config::{
     BackendKind, MAX_MOCK_WORK_ITERATIONS, MAX_RUNTIME_IN_FLIGHT, MAX_RUNTIME_QUEUE_CAPACITY,
@@ -200,6 +200,93 @@ impl fmt::Display for ManagerError {
 }
 
 impl std::error::Error for ManagerError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CapabilityObservationKind {
+    NotEvaluated,
+    Inconclusive,
+    Observed,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum CapabilityObservationOutcome {
+    NotEvaluated,
+    Inconclusive(ManagerError),
+    Observed(NativeRuntimeCapabilities),
+}
+
+/// An opaque capability outcome stamped by the RuntimeManager actor.
+///
+/// There are intentionally no public constructors: callers may inspect an
+/// outcome, but cannot attach copied data or a failed query to a generation.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CapabilityObservation {
+    generation: u64,
+    outcome: CapabilityObservationOutcome,
+}
+
+impl CapabilityObservation {
+    fn not_evaluated(generation: u64) -> Self {
+        Self {
+            generation,
+            outcome: CapabilityObservationOutcome::NotEvaluated,
+        }
+    }
+
+    fn inconclusive(generation: u64, error: ManagerError) -> Self {
+        Self {
+            generation,
+            outcome: CapabilityObservationOutcome::Inconclusive(error),
+        }
+    }
+
+    fn observed(generation: u64, capabilities: NativeRuntimeCapabilities) -> Self {
+        Self {
+            generation,
+            outcome: CapabilityObservationOutcome::Observed(capabilities),
+        }
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub const fn kind(&self) -> CapabilityObservationKind {
+        match self.outcome {
+            CapabilityObservationOutcome::NotEvaluated => CapabilityObservationKind::NotEvaluated,
+            CapabilityObservationOutcome::Inconclusive(_) => {
+                CapabilityObservationKind::Inconclusive
+            }
+            CapabilityObservationOutcome::Observed(_) => CapabilityObservationKind::Observed,
+        }
+    }
+
+    pub const fn capabilities(&self) -> Option<&NativeRuntimeCapabilities> {
+        match &self.outcome {
+            CapabilityObservationOutcome::Observed(capabilities) => Some(capabilities),
+            CapabilityObservationOutcome::NotEvaluated
+            | CapabilityObservationOutcome::Inconclusive(_) => None,
+        }
+    }
+
+    pub const fn error(&self) -> Option<&ManagerError> {
+        match &self.outcome {
+            CapabilityObservationOutcome::Inconclusive(error) => Some(error),
+            CapabilityObservationOutcome::NotEvaluated
+            | CapabilityObservationOutcome::Observed(_) => None,
+        }
+    }
+
+    fn evaluation(&self) -> CapabilityEvaluation {
+        match &self.outcome {
+            CapabilityObservationOutcome::NotEvaluated => CapabilityEvaluation::not_evaluated(),
+            CapabilityObservationOutcome::Inconclusive(_) => CapabilityEvaluation::inconclusive(),
+            CapabilityObservationOutcome::Observed(capabilities) => {
+                CapabilityEvaluation::observed(capabilities.clone())
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct RuntimeManagerConfig {
@@ -405,10 +492,16 @@ impl RuntimeStatus {
         product: &ProductConfig,
         observation: &CapabilityObservation,
     ) -> Result<CapabilityProfile, CapabilityProfileError> {
+        if self.generation != observation.generation {
+            return Err(CapabilityProfileError::StaleObservation {
+                manager_generation: self.generation,
+                observation_generation: observation.generation,
+            });
+        }
         let configured_backend = match product.backend().kind() {
             BackendKind::Mock => RuntimeBackend::Mock,
         };
-        CapabilityProfile::from_observation(
+        CapabilityProfile::from_evaluation(
             configured_backend,
             ManagerCapability::new(
                 match self.state {
@@ -421,7 +514,7 @@ impl RuntimeStatus {
                 },
                 self.generation,
             )?,
-            observation,
+            &observation.evaluation(),
         )
     }
 }
@@ -474,13 +567,18 @@ impl RuntimeManager {
             .map(|response| response.payload)
     }
 
-    pub async fn get_capabilities(&self) -> Result<ObservedRuntimeCapabilities, ManagerError> {
-        let response = self.request(Command::GetCapabilities, Vec::new()).await?;
-        let capabilities = parse_capabilities(&response.payload)
-            .map_err(|error| ManagerError::payload(error, Command::GetCapabilities))?;
-        ObservedRuntimeCapabilities::new(response.generation, capabilities).map_err(|error| {
-            ManagerError::protocol(format!("invalid capability response generation: {error}"))
-        })
+    pub async fn get_capabilities(&self) -> Result<CapabilityObservation, ManagerError> {
+        let (reply, receiver) = oneshot::channel();
+        self.send(ActorCommand::ObserveCapabilities { reply })
+            .await?;
+        receive(receiver).await
+    }
+
+    pub async fn capabilities_not_evaluated(&self) -> Result<CapabilityObservation, ManagerError> {
+        let (reply, receiver) = oneshot::channel();
+        self.send(ActorCommand::CapabilitiesNotEvaluated { reply })
+            .await?;
+        receive(receiver).await
     }
 
     pub async fn run_mock_pipeline(&self) -> Result<MockPipelineSummary, ManagerError> {
@@ -494,6 +592,16 @@ impl RuntimeManager {
         command: Command,
         payload: Vec<u8>,
     ) -> Result<RuntimeResponse, ManagerError> {
+        self.request_bound(command, payload)
+            .await?
+            .map_err(|failure| failure.error)
+    }
+
+    async fn request_bound(
+        &self,
+        command: Command,
+        payload: Vec<u8>,
+    ) -> Result<Result<RuntimeResponse, RuntimeRequestFailure>, ManagerError> {
         let (reply, receiver) = oneshot::channel();
         self.send(ActorCommand::Request {
             command,
@@ -501,7 +609,7 @@ impl RuntimeManager {
             reply,
         })
         .await?;
-        receive(receiver).await?
+        receive(receiver).await
     }
 
     async fn send(&self, command: ActorCommand) -> Result<(), ManagerError> {
@@ -526,10 +634,16 @@ enum ActorCommand {
     Status {
         reply: oneshot::Sender<RuntimeStatus>,
     },
+    CapabilitiesNotEvaluated {
+        reply: oneshot::Sender<CapabilityObservation>,
+    },
+    ObserveCapabilities {
+        reply: oneshot::Sender<CapabilityObservation>,
+    },
     Request {
         command: Command,
         payload: Vec<u8>,
-        reply: oneshot::Sender<Result<RuntimeResponse, ManagerError>>,
+        reply: RuntimeReply,
     },
 }
 
@@ -537,6 +651,12 @@ enum ActorCommand {
 struct RuntimeResponse {
     generation: u64,
     payload: Vec<u8>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RuntimeRequestFailure {
+    generation: u64,
+    error: ManagerError,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -568,12 +688,18 @@ impl RequestIds {
 }
 
 struct PendingRequest {
+    generation: u64,
     command: Command,
     deadline: Instant,
     reply: PendingReply,
 }
 
-type PendingReply = oneshot::Sender<Result<RuntimeResponse, ManagerError>>;
+type RuntimeReply = oneshot::Sender<Result<RuntimeResponse, RuntimeRequestFailure>>;
+
+enum PendingReply {
+    Runtime(RuntimeReply),
+    Capabilities(oneshot::Sender<CapabilityObservation>),
+}
 type StatusReply = oneshot::Sender<Result<RuntimeStatus, ManagerError>>;
 
 struct PendingRequests {
@@ -592,9 +718,10 @@ impl PendingRequests {
     fn insert(
         &mut self,
         request_id: u64,
+        generation: u64,
         command: Command,
         deadline: Instant,
-        reply: oneshot::Sender<Result<RuntimeResponse, ManagerError>>,
+        reply: PendingReply,
     ) -> Result<(), CorrelationError> {
         if self.entries.len() >= self.maximum {
             return Err(CorrelationError::PendingLimit);
@@ -605,6 +732,7 @@ impl PendingRequests {
         self.entries.insert(
             request_id,
             PendingRequest {
+                generation,
                 command,
                 deadline,
                 reply,
@@ -630,7 +758,7 @@ impl PendingRequests {
             .entries
             .remove(&request_id)
             .expect("correlated pending request exists");
-        let _ = pending.reply.send(result);
+        pending.complete(result);
         Ok(())
     }
 
@@ -648,7 +776,7 @@ impl PendingRequests {
     #[cfg(test)]
     fn fail_one(&mut self, request_id: u64, error: ManagerError) {
         if let Some(pending) = self.entries.remove(&request_id) {
-            let _ = pending.reply.send(Err(error));
+            pending.fail(error);
         }
     }
 
@@ -658,8 +786,41 @@ impl PendingRequests {
 
     fn fail_all(&mut self, error: ManagerError) {
         for (_, pending) in std::mem::take(&mut self.entries) {
-            let _ = pending.reply.send(Err(error.clone()));
+            pending.fail(error.clone());
         }
+    }
+}
+
+impl PendingRequest {
+    fn complete(self, result: Result<RuntimeResponse, ManagerError>) {
+        match self.reply {
+            PendingReply::Runtime(reply) => {
+                let result = result.map_err(|error| RuntimeRequestFailure {
+                    generation: self.generation,
+                    error,
+                });
+                let _ = reply.send(result);
+            }
+            PendingReply::Capabilities(reply) => {
+                let observation = match result {
+                    Ok(response) => match parse_capabilities(&response.payload) {
+                        Ok(capabilities) => {
+                            CapabilityObservation::observed(self.generation, capabilities)
+                        }
+                        Err(error) => CapabilityObservation::inconclusive(
+                            self.generation,
+                            ManagerError::payload(error, Command::GetCapabilities),
+                        ),
+                    },
+                    Err(error) => CapabilityObservation::inconclusive(self.generation, error),
+                };
+                let _ = reply.send(observation);
+            }
+        }
+    }
+
+    fn fail(self, error: ManagerError) {
+        self.complete(Err(error));
     }
 }
 
@@ -957,11 +1118,25 @@ impl Actor {
             ActorCommand::Status { reply } => {
                 let _ = reply.send(self.status().await);
             }
+            ActorCommand::CapabilitiesNotEvaluated { reply } => {
+                let _ = reply.send(CapabilityObservation::not_evaluated(self.state.generation));
+            }
+            ActorCommand::ObserveCapabilities { reply } => {
+                self.send_request(
+                    Command::GetCapabilities,
+                    Vec::new(),
+                    PendingReply::Capabilities(reply),
+                )
+                .await;
+            }
             ActorCommand::Request {
                 command,
                 payload,
                 reply,
-            } => self.send_request(command, payload, reply).await,
+            } => {
+                self.send_request(command, payload, PendingReply::Runtime(reply))
+                    .await;
+            }
         }
     }
 
@@ -1089,12 +1264,7 @@ impl Actor {
         }
     }
 
-    async fn send_request(
-        &mut self,
-        command: Command,
-        payload: Vec<u8>,
-        reply: oneshot::Sender<Result<RuntimeResponse, ManagerError>>,
-    ) {
+    async fn send_request(&mut self, command: Command, payload: Vec<u8>, reply: PendingReply) {
         if self.state.state != RuntimeState::Connected {
             let error = if self.state.state == RuntimeState::Stopping {
                 ManagerError::new(
@@ -1105,25 +1275,43 @@ impl Actor {
             } else {
                 ManagerError::unavailable("Runtime is not connected")
             };
-            let _ = reply.send(Err(error));
+            PendingRequest {
+                generation: self.state.generation,
+                command,
+                deadline: Instant::now(),
+                reply,
+            }
+            .fail(error);
             return;
         }
         if self.pending.entries.len() >= self.pending.maximum {
-            let _ = reply.send(Err(ManagerError::new(
+            PendingRequest {
+                generation: self.state.generation,
+                command,
+                deadline: Instant::now(),
+                reply,
+            }
+            .fail(ManagerError::new(
                 ErrorCode::RuntimeUnavailable,
                 ManagerErrorKind::Capacity,
                 "maximum in-flight request count reached",
-            )));
+            ));
             return;
         }
         let request_id = match self.ids.allocate() {
             Ok(value) => value,
             Err(_) => {
-                let _ = reply.send(Err(ManagerError::new(
+                PendingRequest {
+                    generation: self.state.generation,
+                    command,
+                    deadline: Instant::now(),
+                    reply,
+                }
+                .fail(ManagerError::new(
                     ErrorCode::InternalError,
                     ManagerErrorKind::RequestIdExhausted,
                     "request ID space exhausted",
-                )));
+                ));
                 return;
             }
         };
@@ -1138,17 +1326,24 @@ impl Actor {
         let frame = match encode(&message) {
             Ok(value) => value,
             Err(error) => {
-                let _ = reply.send(Err(ManagerError::new(
+                PendingRequest {
+                    generation: self.state.generation,
+                    command,
+                    deadline: Instant::now(),
+                    reply,
+                }
+                .fail(ManagerError::new(
                     error.code,
                     ManagerErrorKind::Payload,
                     format!("request violates the command contract: {:?}", error.kind),
-                )));
+                ));
                 return;
             }
         };
         self.pending
             .insert(
                 request_id,
+                self.state.generation,
                 command,
                 Instant::now() + self.config.request_timeout,
                 reply,
@@ -1489,7 +1684,7 @@ impl Actor {
         };
         self.pending.fail_all(pending_error);
         if let Some(primary) = primary {
-            let _ = primary.reply.send(Err(error.clone()));
+            primary.fail(error.clone());
         }
         if let Some(start) = start {
             let _ = start.reply.send(Err(error.clone()));
@@ -1914,9 +2109,10 @@ mod tests {
             .pending
             .insert(
                 41,
+                1,
                 Command::Ping,
                 Instant::now() + Duration::from_millis(50),
-                expired_tx,
+                PendingReply::Runtime(expired_tx),
             )
             .unwrap();
         let actor_task = tokio::spawn(actor.run());
@@ -1936,7 +2132,8 @@ mod tests {
             .unwrap()
             .unwrap_err();
 
-        assert_eq!(error.kind, ManagerErrorKind::Timeout);
+        assert_eq!(error.generation, 1);
+        assert_eq!(error.error.kind, ManagerErrorKind::Timeout);
         assert!(!test_process_exists(pid).await);
         let (status_tx, status_rx) = oneshot::channel();
         command_tx
@@ -1968,13 +2165,31 @@ mod tests {
         let (overflow_tx, _overflow_rx) = oneshot::channel();
 
         pending
-            .insert(7, Command::Ping, deadline, first_tx)
+            .insert(
+                7,
+                3,
+                Command::Ping,
+                deadline,
+                PendingReply::Runtime(first_tx),
+            )
             .unwrap();
         pending
-            .insert(8, Command::GetCapabilities, deadline, second_tx)
+            .insert(
+                8,
+                3,
+                Command::GetCapabilities,
+                deadline,
+                PendingReply::Runtime(second_tx),
+            )
             .unwrap();
         assert_eq!(
-            pending.insert(9, Command::Ping, deadline, overflow_tx),
+            pending.insert(
+                9,
+                3,
+                Command::Ping,
+                deadline,
+                PendingReply::Runtime(overflow_tx),
+            ),
             Err(CorrelationError::PendingLimit)
         );
 
@@ -2026,14 +2241,21 @@ mod tests {
         let (later_tx, later_rx) = oneshot::channel();
         let (first_tx, first_rx) = oneshot::channel();
         pending
-            .insert(20, Command::Ping, now + Duration::from_secs(2), later_tx)
+            .insert(
+                20,
+                9,
+                Command::Ping,
+                now + Duration::from_secs(2),
+                PendingReply::Runtime(later_tx),
+            )
             .unwrap();
         pending
             .insert(
                 10,
+                9,
                 Command::GetCapabilities,
                 now + Duration::from_secs(1),
-                first_tx,
+                PendingReply::Runtime(first_tx),
             )
             .unwrap();
 
@@ -2043,9 +2265,11 @@ mod tests {
         let timeout = ManagerError::timeout("request 10 timed out");
         pending.fail_one(10, timeout.clone());
         pending.fail_all(ManagerError::unavailable("stream invalidated"));
-        assert_eq!(first_rx.await.unwrap().unwrap_err(), timeout);
+        let first_failure = first_rx.await.unwrap().unwrap_err();
+        assert_eq!(first_failure.generation, 9);
+        assert_eq!(first_failure.error, timeout);
         assert_eq!(
-            later_rx.await.unwrap().unwrap_err().code,
+            later_rx.await.unwrap().unwrap_err().error.code,
             ErrorCode::RuntimeUnavailable
         );
         assert!(pending.entries.is_empty());

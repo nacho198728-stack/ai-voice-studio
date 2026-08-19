@@ -43,5 +43,6 @@ available or unavailable.
 
 No capability path reads CPU, GPU, RAM, NPU, audio devices, drivers, benchmark
 tiers, or machine identifiers. Unknown platform/architecture remains `unknown`;
-an unqueried connected Runtime remains `not_evaluated`; a stopped Runtime or an
-explicit native unavailable response remains `unavailable`.
+a connected Runtime is `available`, while its engine/backend observation remains
+`not_evaluated` until queried; a stopped Runtime is `unavailable`, and an
+explicit native unavailable response marks only the engine `unavailable`.

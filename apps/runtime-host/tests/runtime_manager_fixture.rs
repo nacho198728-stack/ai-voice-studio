@@ -4,8 +4,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use ai_voice_config::ProductConfig;
 use ai_voice_runtime_host::{
-    ManagerErrorKind, RuntimeExitReason, RuntimeManager, RuntimeManagerConfig, RuntimeState,
+    CapabilityAvailability, CapabilityObservationKind, CapabilityProfileError, ManagerErrorKind,
+    RuntimeExitReason, RuntimeManager, RuntimeManagerConfig, RuntimeState,
 };
 
 fn fixture_path() -> PathBuf {
@@ -25,6 +27,76 @@ fn config(mode: &str) -> RuntimeManagerConfig {
     config.request_timeout = Duration::from_millis(500);
     config.shutdown_timeout = Duration::from_millis(500);
     config
+}
+
+fn product_config() -> ProductConfig {
+    ProductConfig::load_from_bytes(include_bytes!("../../../config/config.json")).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn actor_mints_not_evaluated_for_the_current_generation() {
+    let manager = manager("shutdown-race");
+    let status = manager.start_runtime().await.unwrap();
+
+    let observation = manager.capabilities_not_evaluated().await.unwrap();
+    assert_eq!(observation.generation(), status.generation);
+    assert_eq!(observation.kind(), CapabilityObservationKind::NotEvaluated);
+    assert_eq!(observation.capabilities(), None);
+    assert_eq!(observation.error(), None);
+    let profile = status
+        .capability_profile(&product_config(), &observation)
+        .unwrap();
+    assert_eq!(
+        profile.runtime().availability(),
+        CapabilityAvailability::Available
+    );
+    assert_eq!(
+        profile.engine().availability(),
+        CapabilityAvailability::NotEvaluated
+    );
+
+    manager.stop_runtime().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn failed_capability_query_is_actor_bound_and_stale_after_restart() {
+    let manager = manager("capability-error");
+    let first = manager.start_runtime().await.unwrap();
+    let old_failure = manager.get_capabilities().await.unwrap();
+    assert_eq!(old_failure.generation(), first.generation);
+    assert_eq!(old_failure.kind(), CapabilityObservationKind::Inconclusive);
+    assert_eq!(old_failure.error().unwrap().kind, ManagerErrorKind::Remote);
+
+    manager.stop_runtime().await.unwrap();
+    let restarted = manager.start_runtime().await.unwrap();
+    assert_eq!(restarted.generation, first.generation + 1);
+    let stale = restarted
+        .capability_profile(&product_config(), &old_failure)
+        .unwrap_err();
+    assert_eq!(
+        stale,
+        CapabilityProfileError::StaleObservation {
+            manager_generation: restarted.generation,
+            observation_generation: first.generation,
+        }
+    );
+
+    let fresh_failure = manager.get_capabilities().await.unwrap();
+    assert_eq!(fresh_failure.generation(), restarted.generation);
+    let profile = restarted
+        .capability_profile(&product_config(), &fresh_failure)
+        .unwrap();
+    assert_eq!(
+        profile.runtime().availability(),
+        CapabilityAvailability::Available
+    );
+    assert_eq!(
+        profile.engine().availability(),
+        CapabilityAvailability::Unknown
+    );
+    manager.stop_runtime().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

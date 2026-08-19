@@ -6,7 +6,9 @@ platform, architecture, canonical Runtime/protocol versions, backend and Mock
 engine availability, plus manager health/generation. It does not inspect or
 infer hardware, audio devices, drivers, benchmarks, or machine identity.
 
-Query observations are explicitly `not_evaluated`, `inconclusive`, or a
-validated native observation and carry the RuntimeManager generation they came
-from. Profile construction rejects stale generations. Runtime reachability is
-derived from manager health independently of Mock engine availability.
+The pure truth-table input is explicitly `not_evaluated`, `inconclusive`, or a
+validated native evaluation. RuntimeHost owns the opaque query observation and
+attaches the authoritative RuntimeManager generation inside its actor; callers
+cannot mint or relabel one. RuntimeHost rejects stale generations before using
+this crate's semantic mapping. Runtime reachability is derived from manager
+health independently of Mock engine availability.

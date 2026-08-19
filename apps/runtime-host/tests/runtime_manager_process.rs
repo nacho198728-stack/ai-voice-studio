@@ -2,9 +2,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
-use ai_voice_capability::{
-    CapabilityObservation, CapabilityProfileError, EngineIdentity, RuntimeBackend,
-};
+use ai_voice_capability::{CapabilityProfileError, EngineIdentity, RuntimeBackend};
 use ai_voice_config::ProductConfig;
 use ai_voice_runtime_host::{RuntimeManager, RuntimeManagerConfig, RuntimeState};
 
@@ -42,9 +40,12 @@ async fn real_child_start_concurrent_commands_pipeline_and_clean_stop() {
     assert_eq!(ping.expect("Ping succeeds"), ping_bytes);
     let capabilities = capabilities.expect("capability query succeeds");
     assert_eq!(capabilities.generation(), 1);
-    assert_eq!(capabilities.capabilities().backend(), RuntimeBackend::Mock);
     assert_eq!(
-        capabilities.capabilities().engine_identity(),
+        capabilities.capabilities().unwrap().backend(),
+        RuntimeBackend::Mock
+    );
+    assert_eq!(
+        capabilities.capabilities().unwrap().engine_identity(),
         Some(EngineIdentity::AivsMockV1)
     );
 
@@ -104,7 +105,7 @@ async fn idle_child_exit_is_published_as_crashed_and_can_be_started_again() {
     let product =
         ProductConfig::load_from_bytes(include_bytes!("../../../config/config.json")).unwrap();
     let stale = restarted
-        .capability_profile(&product, &CapabilityObservation::observed(generation_one))
+        .capability_profile(&product, &generation_one)
         .unwrap_err();
     assert_eq!(
         stale,

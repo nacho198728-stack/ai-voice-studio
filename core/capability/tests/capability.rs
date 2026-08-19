@@ -1,8 +1,8 @@
 use ai_voice_capability::{
-    Architecture, CapabilityAvailability, CapabilityObservation, CapabilityProfile,
+    Architecture, CapabilityAvailability, CapabilityEvaluation, CapabilityProfile,
     CapabilityProfileError, EngineIdentity, ManagerCapability, ManagerHealth,
-    NativeCapabilityError, NativeCapabilityMismatch, NativeRuntimeCapabilities,
-    ObservedRuntimeCapabilities, Platform, RuntimeBackend,
+    NativeCapabilityError, NativeCapabilityMismatch, NativeRuntimeCapabilities, Platform,
+    RuntimeBackend,
 };
 
 const MOCK_NATIVE: &[u8] = br#"{"platform":"macos","architecture":"arm64","runtime_version":"0.0.0","protocol_version":1,"backend":"mock","engine":"aivs-mock-v1"}"#;
@@ -15,12 +15,12 @@ fn native(bytes: &[u8]) -> NativeRuntimeCapabilities {
 fn profile(
     health: ManagerHealth,
     generation: u64,
-    observation: &CapabilityObservation,
+    evaluation: &CapabilityEvaluation,
 ) -> Result<CapabilityProfile, CapabilityProfileError> {
-    CapabilityProfile::from_observation(
+    CapabilityProfile::from_evaluation(
         RuntimeBackend::Mock,
         ManagerCapability::new(health, generation)?,
-        observation,
+        evaluation,
     )
 }
 
@@ -105,67 +105,63 @@ fn literal_truth_table_covers_every_manager_state_and_query_outcome() {
             "stopped",
             ManagerHealth::Stopped,
             0,
-            CapabilityObservation::not_evaluated(0),
+            CapabilityEvaluation::not_evaluated(),
             r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"stopped","generation":0}}"#,
         ),
         (
             "starting",
             ManagerHealth::Starting,
             1,
-            CapabilityObservation::not_evaluated(1),
+            CapabilityEvaluation::not_evaluated(),
             r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"not_evaluated"},"engine":{"identity":"aivs-mock-v1","availability":"not_evaluated"},"manager":{"health":"starting","generation":1}}"#,
         ),
         (
             "connected-not-evaluated",
             ManagerHealth::Connected,
             1,
-            CapabilityObservation::not_evaluated(1),
+            CapabilityEvaluation::not_evaluated(),
             r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"not_evaluated"},"manager":{"health":"connected","generation":1}}"#,
         ),
         (
             "connected-inconclusive",
             ManagerHealth::Connected,
             1,
-            CapabilityObservation::inconclusive(1),
+            CapabilityEvaluation::inconclusive(),
             r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"unknown"},"manager":{"health":"connected","generation":1}}"#,
         ),
         (
             "connected-mock",
             ManagerHealth::Connected,
             1,
-            CapabilityObservation::observed(
-                ObservedRuntimeCapabilities::new(1, mock.clone()).unwrap(),
-            ),
+            CapabilityEvaluation::observed(mock.clone()),
             r#"{"schema_version":1,"platform":"macos","architecture":"arm64","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"available"},"engine":{"identity":"aivs-mock-v1","availability":"available"},"manager":{"health":"connected","generation":1}}"#,
         ),
         (
             "connected-unavailable-engine",
             ManagerHealth::Connected,
             1,
-            CapabilityObservation::observed(
-                ObservedRuntimeCapabilities::new(1, unavailable).unwrap(),
-            ),
+            CapabilityEvaluation::observed(unavailable),
             r#"{"schema_version":1,"platform":"windows","architecture":"x86_64","runtime":{"version":"0.0.0","protocol_version":1,"backend":"unavailable","availability":"available"},"engine":{"identity":null,"availability":"unavailable"},"manager":{"health":"connected","generation":1}}"#,
         ),
         (
             "stopping",
             ManagerHealth::Stopping,
             1,
-            CapabilityObservation::not_evaluated(1),
+            CapabilityEvaluation::not_evaluated(),
             r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"stopping","generation":1}}"#,
         ),
         (
             "crashed",
             ManagerHealth::Crashed,
             1,
-            CapabilityObservation::not_evaluated(1),
+            CapabilityEvaluation::not_evaluated(),
             r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"crashed","generation":1}}"#,
         ),
         (
             "error",
             ManagerHealth::Error,
             1,
-            CapabilityObservation::not_evaluated(1),
+            CapabilityEvaluation::not_evaluated(),
             r#"{"schema_version":1,"platform":"unknown","architecture":"unknown","runtime":{"version":"0.0.0","protocol_version":1,"backend":"mock","availability":"unavailable"},"engine":{"identity":"aivs-mock-v1","availability":"unavailable"},"manager":{"health":"error","generation":1}}"#,
         ),
     ];
@@ -178,11 +174,11 @@ fn literal_truth_table_covers_every_manager_state_and_query_outcome() {
 }
 
 #[test]
-fn unknown_requires_an_inconclusive_query_and_observations_match_generation() {
+fn unknown_requires_an_inconclusive_query() {
     let not_evaluated = profile(
         ManagerHealth::Connected,
         7,
-        &CapabilityObservation::not_evaluated(7),
+        &CapabilityEvaluation::not_evaluated(),
     )
     .unwrap();
     assert_eq!(
@@ -193,7 +189,7 @@ fn unknown_requires_an_inconclusive_query_and_observations_match_generation() {
     let inconclusive = profile(
         ManagerHealth::Connected,
         7,
-        &CapabilityObservation::inconclusive(7),
+        &CapabilityEvaluation::inconclusive(),
     )
     .unwrap();
     assert_eq!(
@@ -201,28 +197,12 @@ fn unknown_requires_an_inconclusive_query_and_observations_match_generation() {
         CapabilityAvailability::Unknown
     );
 
-    let stale = profile(
-        ManagerHealth::Connected,
-        8,
-        &CapabilityObservation::inconclusive(7),
-    )
-    .unwrap_err();
-    assert_eq!(
-        stale,
-        CapabilityProfileError::StaleObservation {
-            manager_generation: 8,
-            observation_generation: 7,
-        }
-    );
     assert!(ManagerCapability::new(ManagerHealth::Connected, 0).is_err());
-    assert!(ObservedRuntimeCapabilities::new(0, native(MOCK_NATIVE)).is_err());
 }
 
 #[test]
 fn capability_profile_contains_no_inferred_or_sensitive_hardware() {
-    let observation = CapabilityObservation::observed(
-        ObservedRuntimeCapabilities::new(7, native(MOCK_NATIVE)).unwrap(),
-    );
+    let observation = CapabilityEvaluation::observed(native(MOCK_NATIVE));
     let actual =
         serde_json::to_string(&profile(ManagerHealth::Connected, 7, &observation).unwrap())
             .unwrap();

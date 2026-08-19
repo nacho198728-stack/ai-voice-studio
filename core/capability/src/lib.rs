@@ -216,78 +216,44 @@ impl ManagerCapability {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ObservedRuntimeCapabilities {
-    generation: u64,
-    capabilities: NativeRuntimeCapabilities,
-}
-
-impl ObservedRuntimeCapabilities {
-    pub fn new(
-        generation: u64,
-        capabilities: NativeRuntimeCapabilities,
-    ) -> Result<Self, CapabilityProfileError> {
-        if generation == 0 {
-            return Err(CapabilityProfileError::InvalidObservationGeneration);
-        }
-        Ok(Self {
-            generation,
-            capabilities,
-        })
-    }
-
-    pub const fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    pub const fn capabilities(&self) -> &NativeRuntimeCapabilities {
-        &self.capabilities
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ObservationKind {
+enum EvaluationKind {
     NotEvaluated,
     Inconclusive,
     Observed(NativeRuntimeCapabilities),
 }
 
+/// Generation-free input to the capability truth table.
+///
+/// RuntimeManager provenance is enforced by the host-owned observation before
+/// it is projected into this semantic evaluation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CapabilityObservation {
-    generation: u64,
-    kind: ObservationKind,
+pub struct CapabilityEvaluation {
+    kind: EvaluationKind,
 }
 
-impl CapabilityObservation {
-    pub const fn not_evaluated(generation: u64) -> Self {
+impl CapabilityEvaluation {
+    pub const fn not_evaluated() -> Self {
         Self {
-            generation,
-            kind: ObservationKind::NotEvaluated,
+            kind: EvaluationKind::NotEvaluated,
         }
     }
 
-    pub const fn inconclusive(generation: u64) -> Self {
+    pub const fn inconclusive() -> Self {
         Self {
-            generation,
-            kind: ObservationKind::Inconclusive,
+            kind: EvaluationKind::Inconclusive,
         }
     }
 
-    pub fn observed(observation: ObservedRuntimeCapabilities) -> Self {
+    pub fn observed(capabilities: NativeRuntimeCapabilities) -> Self {
         Self {
-            generation: observation.generation,
-            kind: ObservationKind::Observed(observation.capabilities),
+            kind: EvaluationKind::Observed(capabilities),
         }
-    }
-
-    pub const fn generation(&self) -> u64 {
-        self.generation
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CapabilityProfileError {
     InvalidManagerGeneration,
-    InvalidObservationGeneration,
     StaleObservation {
         manager_generation: u64,
         observation_generation: u64,
@@ -302,9 +268,6 @@ impl fmt::Display for CapabilityProfileError {
         match self {
             Self::InvalidManagerGeneration => {
                 formatter.write_str("non-stopped manager generation must be nonzero")
-            }
-            Self::InvalidObservationGeneration => {
-                formatter.write_str("observed Runtime generation must be nonzero")
             }
             Self::StaleObservation {
                 manager_generation,
@@ -378,19 +341,13 @@ pub struct CapabilityProfile {
 }
 
 impl CapabilityProfile {
-    pub fn from_observation(
+    pub fn from_evaluation(
         configured_backend: RuntimeBackend,
         manager: ManagerCapability,
-        observation: &CapabilityObservation,
+        evaluation: &CapabilityEvaluation,
     ) -> Result<Self, CapabilityProfileError> {
-        if manager.generation != observation.generation {
-            return Err(CapabilityProfileError::StaleObservation {
-                manager_generation: manager.generation,
-                observation_generation: observation.generation,
-            });
-        }
         if manager.health != ManagerHealth::Connected
-            && !matches!(observation.kind, ObservationKind::NotEvaluated)
+            && !matches!(evaluation.kind, EvaluationKind::NotEvaluated)
         {
             return Err(CapabilityProfileError::ObservationNotAllowed {
                 health: manager.health,
@@ -411,8 +368,8 @@ impl CapabilityProfile {
                     configured_identity,
                     CapabilityAvailability::NotEvaluated,
                 ),
-                ManagerHealth::Connected => match &observation.kind {
-                    ObservationKind::NotEvaluated => (
+                ManagerHealth::Connected => match &evaluation.kind {
+                    EvaluationKind::NotEvaluated => (
                         Platform::Unknown,
                         Architecture::Unknown,
                         configured_backend,
@@ -420,7 +377,7 @@ impl CapabilityProfile {
                         configured_identity,
                         CapabilityAvailability::NotEvaluated,
                     ),
-                    ObservationKind::Inconclusive => (
+                    EvaluationKind::Inconclusive => (
                         Platform::Unknown,
                         Architecture::Unknown,
                         configured_backend,
@@ -428,7 +385,7 @@ impl CapabilityProfile {
                         configured_identity,
                         CapabilityAvailability::Unknown,
                     ),
-                    ObservationKind::Observed(native) => (
+                    EvaluationKind::Observed(native) => (
                         native.platform,
                         native.architecture,
                         native.backend,

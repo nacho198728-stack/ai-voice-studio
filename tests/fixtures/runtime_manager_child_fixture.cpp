@@ -82,6 +82,19 @@ message::RuntimeMessage response(
   };
 }
 
+message::RuntimeMessage error_response(
+    const message::RuntimeMessage& request,
+    ErrorCode error_code) {
+  return {
+      message::MessageKind::Response,
+      ai_voice::contracts::kIpcProtocolCurrentVersion,
+      request.request_id,
+      request.command,
+      error_code,
+      {},
+  };
+}
+
 void close_stdout() {
   std::fflush(stdout);
 #if defined(_WIN32)
@@ -303,6 +316,12 @@ int run_loop(std::string_view mode) {
         continue;
       }
       if (request.command == message::Command::GetCapabilities) {
+        if (mode == "capability-error") {
+          if (!send(error_response(request, ErrorCode::EngineUnavailable))) {
+            return 3;
+          }
+          continue;
+        }
         if (!send(response(request, request.command, bytes(kCapabilities)))) {
           return 3;
         }
