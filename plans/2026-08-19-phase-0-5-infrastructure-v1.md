@@ -60,7 +60,7 @@
 
 - [x] 在 `tests/runtime` 建立进程集成测试。覆盖启动、握手、能力查询、优雅关闭、异常退出和无孤儿进程。
 
-- [ ] 在 `tests/benchmark` 建立 Mock Pipeline 测试。验证确定性输出、模拟延迟、reset、metrics 和返回校验值。
+- [x] 在 `tests/benchmark` 建立 Mock Pipeline 测试。验证确定性输出、模拟延迟、reset、metrics 和返回校验值。
 
 - [ ] 在 `.github/workflows/build.yml` 新增 macOS arm64 与 Windows x64 jobs。两个干净 runner 均执行 CMake/CTest、Cargo、前端和 Tauri 验证；Windows 额外验证 MSVC 动态库加载与子进程关闭，真实 Windows 结果为验收门槛。
 
