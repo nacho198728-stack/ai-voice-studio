@@ -56,7 +56,7 @@
 
 - [x] 在 `tests/contract` 建立 C ABI contract test。分别用 C 和 C++ 编译头文件，验证 ABI version、struct size、函数表和插件入口。
 
-- [ ] 在 Rust workspace 建立协议 contract test。验证 RuntimeMessage、ErrorCode、版本兼容和非法消息拒绝行为。
+- [x] 在 Rust workspace 建立协议 contract test。验证 RuntimeMessage、ErrorCode、版本兼容和非法消息拒绝行为。
 
 - [ ] 在 `tests/runtime` 建立进程集成测试。覆盖启动、握手、能力查询、优雅关闭、异常退出和无孤儿进程。
 
