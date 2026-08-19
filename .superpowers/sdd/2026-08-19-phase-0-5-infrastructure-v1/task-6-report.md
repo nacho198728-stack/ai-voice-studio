@@ -121,3 +121,7 @@ Engine, IPC, Rust FFI, Tauri integration, device access, or model execution.
   compile and run. They validate exact 64-bit layout, factory range/capacity
   behavior, complete/non-complete stub tables, and zero/maximum/overflow PCM
   byte arithmetic without introducing an engine implementation.
+
+### Review-fix commit
+
+- `22425f1` — `fix(runtime): complete VoiceEngine ABI v1 contract`
