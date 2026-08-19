@@ -84,19 +84,22 @@ static aivs_error_code_t stub_metrics(
 }
 
 #if defined(_WIN32)
-typedef aivs_error_code_t(__cdecl* aivs_test_expected_factory_fn)(
-    const aivs_voice_engine_factory_request_t* request,
-    aivs_voice_engine_api_t* out_api,
+typedef int32_t(__cdecl* aivs_test_expected_factory_fn)(
+    const struct aivs_voice_engine_factory_request* request,
+    struct aivs_voice_engine_api* out_api,
     uint32_t out_api_capacity_bytes);
 #else
-typedef aivs_error_code_t(*aivs_test_expected_factory_fn)(
-    const aivs_voice_engine_factory_request_t* request,
-    aivs_voice_engine_api_t* out_api,
+typedef int32_t(*aivs_test_expected_factory_fn)(
+    const struct aivs_voice_engine_factory_request* request,
+    struct aivs_voice_engine_api* out_api,
     uint32_t out_api_capacity_bytes);
 #endif
 
 _Static_assert(sizeof(float) == 4U, "PCM must use four-byte float storage");
 _Static_assert(sizeof(aivs_error_code_t) == 4U, "error code width must remain canonical");
+_Static_assert(
+    _Generic((aivs_error_code_t)0, int32_t : 1, default : 0),
+    "canonical error code type must be exactly int32_t");
 _Static_assert(sizeof(aivs_bool_t) == 4U, "ABI boolean width drifted");
 _Static_assert(sizeof(aivs_pcm_format_t) == 4U, "PCM format width drifted");
 _Static_assert(sizeof(aivs_pcm_layout_t) == 4U, "PCM layout width drifted");

@@ -28,6 +28,33 @@ set_target_properties(
 )
 add_test(NAME aivs_voice_engine_c_abi_cpp_test COMMAND aivs_voice_engine_c_abi_cpp_test)
 
+add_test(
+  NAME aivs_voice_engine_c_abi_c_rejects_unsigned_error_alias
+  COMMAND
+    ${CMAKE_COMMAND}
+    "-DCOMPILER=${CMAKE_C_COMPILER}"
+    -DLANGUAGE=C
+    "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/voice_engine_unsigned_error_alias_test.c"
+    "-DOBJECT=${CMAKE_CURRENT_BINARY_DIR}/voice-engine-unsigned-error-alias-c.obj"
+    "-DVOICE_ENGINE_INCLUDE=${PROJECT_SOURCE_DIR}/runtime/api"
+    "-DCONTRACTS_INCLUDE=${PROJECT_SOURCE_DIR}/core/contracts/include"
+    "-DMSVC_PLATFORM=${MSVC}"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/contract/voice_engine_adversarial_compile.cmake
+)
+add_test(
+  NAME aivs_voice_engine_c_abi_cpp_rejects_unsigned_error_alias
+  COMMAND
+    ${CMAKE_COMMAND}
+    "-DCOMPILER=${CMAKE_CXX_COMPILER}"
+    -DLANGUAGE=CXX
+    "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/voice_engine_unsigned_error_alias_test.cpp"
+    "-DOBJECT=${CMAKE_CURRENT_BINARY_DIR}/voice-engine-unsigned-error-alias-cpp.obj"
+    "-DVOICE_ENGINE_INCLUDE=${PROJECT_SOURCE_DIR}/runtime/api"
+    "-DCONTRACTS_INCLUDE=${PROJECT_SOURCE_DIR}/core/contracts/include"
+    "-DMSVC_PLATFORM=${MSVC}"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/contract/voice_engine_adversarial_compile.cmake
+)
+
 foreach(target IN ITEMS aivs_voice_engine_c_abi_c_test aivs_voice_engine_c_abi_cpp_test)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /WX)
