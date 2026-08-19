@@ -82,6 +82,24 @@
       "meaning": "No compatible VoiceEngine is available."
     },
     {
+      "name": "InvalidArgument",
+      "value": 1301,
+      "category": "engine",
+      "meaning": "A VoiceEngine ABI argument, structure prefix, or buffer view is invalid."
+    },
+    {
+      "name": "InvalidState",
+      "value": 1302,
+      "category": "engine",
+      "meaning": "The VoiceEngine operation is not valid in the handle's current lifecycle state."
+    },
+    {
+      "name": "BufferTooSmall",
+      "value": 1303,
+      "category": "engine",
+      "meaning": "A caller-owned VoiceEngine output buffer lacks the required capacity."
+    },
+    {
       "name": "InternalError",
       "value": 1900,
       "category": "internal",

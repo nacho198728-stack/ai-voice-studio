@@ -2,3 +2,11 @@ add_executable(aivs_contract_mapping_test contract/contracts_mapping_test.cpp)
 target_link_libraries(aivs_contract_mapping_test PRIVATE ai_voice_contracts)
 
 add_test(NAME aivs_contract_mapping_test COMMAND aivs_contract_mapping_test)
+
+add_executable(aivs_voice_engine_c_abi_c_test contract/voice_engine_c_abi_c_test.c)
+target_link_libraries(aivs_voice_engine_c_abi_c_test PRIVATE ai_voice::voice_engine_abi)
+add_test(NAME aivs_voice_engine_c_abi_c_test COMMAND aivs_voice_engine_c_abi_c_test)
+
+add_executable(aivs_voice_engine_c_abi_cpp_test contract/voice_engine_c_abi_cpp_test.cpp)
+target_link_libraries(aivs_voice_engine_c_abi_cpp_test PRIVATE ai_voice::voice_engine_abi)
+add_test(NAME aivs_voice_engine_c_abi_cpp_test COMMAND aivs_voice_engine_c_abi_cpp_test)

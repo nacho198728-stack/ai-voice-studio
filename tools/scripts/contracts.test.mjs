@@ -60,6 +60,9 @@ function validErrorCodes() {
       { name: "RuntimeUnavailable", value: 1200, category: "runtime", meaning: "The isolated runtime is unavailable." },
       { name: "RuntimeShuttingDown", value: 1201, category: "runtime", meaning: "The isolated runtime is shutting down." },
       { name: "EngineUnavailable", value: 1300, category: "engine", meaning: "No compatible VoiceEngine is available." },
+      { name: "InvalidArgument", value: 1301, category: "engine", meaning: "A VoiceEngine ABI argument, structure prefix, or buffer view is invalid." },
+      { name: "InvalidState", value: 1302, category: "engine", meaning: "The VoiceEngine operation is not valid in the handle's current lifecycle state." },
+      { name: "BufferTooSmall", value: 1303, category: "engine", meaning: "A caller-owned VoiceEngine output buffer lacks the required capacity." },
       { name: "InternalError", value: 1900, category: "internal", meaning: "An unexpected internal boundary failure occurred." },
     ],
   };
@@ -95,13 +98,21 @@ test("generate produces repeatable mappings accepted by read-only check", (t) =>
   run(root, "generate");
   const rustPath = path.join(root, "core/contracts/src/generated.rs");
   const cppPath = path.join(root, "core/contracts/include/ai_voice_contracts/generated_contracts.hpp");
+  const cPath = path.join(
+    root,
+    "core/contracts/include/ai_voice_contracts/generated_contracts_c.h",
+  );
   const firstRust = readFileSync(rustPath, "utf8");
   const firstCpp = readFileSync(cppPath, "utf8");
+  const firstC = readFileSync(cPath, "utf8");
 
   assert.doesNotThrow(() => run(root, "check"));
   run(root, "generate");
   assert.equal(readFileSync(rustPath, "utf8"), firstRust);
   assert.equal(readFileSync(cppPath, "utf8"), firstCpp);
+  assert.equal(readFileSync(cPath, "utf8"), firstC);
+  assert.match(firstC, /AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION/);
+  assert.match(firstC, /AIVS_ERROR_INVALID_ARGUMENT/);
 });
 
 test("check detects stale generated output without rewriting it", (t) => {

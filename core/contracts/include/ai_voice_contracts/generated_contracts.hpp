@@ -34,6 +34,9 @@ enum class ErrorCode : std::int32_t {
   RuntimeUnavailable = 1200,
   RuntimeShuttingDown = 1201,
   EngineUnavailable = 1300,
+  InvalidArgument = 1301,
+  InvalidState = 1302,
+  BufferTooSmall = 1303,
   InternalError = 1900,
 };
 
@@ -60,6 +63,9 @@ constexpr std::optional<ErrorCode> error_code_from_value(std::int32_t value) {
     case 1200: return ErrorCode::RuntimeUnavailable;
     case 1201: return ErrorCode::RuntimeShuttingDown;
     case 1300: return ErrorCode::EngineUnavailable;
+    case 1301: return ErrorCode::InvalidArgument;
+    case 1302: return ErrorCode::InvalidState;
+    case 1303: return ErrorCode::BufferTooSmall;
     case 1900: return ErrorCode::InternalError;
     default: return std::nullopt;
   }
@@ -75,6 +81,9 @@ constexpr ErrorCategory error_code_category(ErrorCode code) {
     case ErrorCode::RuntimeUnavailable: return ErrorCategory::Runtime;
     case ErrorCode::RuntimeShuttingDown: return ErrorCategory::Runtime;
     case ErrorCode::EngineUnavailable: return ErrorCategory::Engine;
+    case ErrorCode::InvalidArgument: return ErrorCategory::Engine;
+    case ErrorCode::InvalidState: return ErrorCategory::Engine;
+    case ErrorCode::BufferTooSmall: return ErrorCategory::Engine;
     case ErrorCode::InternalError: return ErrorCategory::Internal;
   }
   return ErrorCategory::Internal;

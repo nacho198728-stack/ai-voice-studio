@@ -29,6 +29,9 @@ pub enum ErrorCode {
     RuntimeUnavailable = 1200,
     RuntimeShuttingDown = 1201,
     EngineUnavailable = 1300,
+    InvalidArgument = 1301,
+    InvalidState = 1302,
+    BufferTooSmall = 1303,
     InternalError = 1900,
 }
 
@@ -58,6 +61,9 @@ pub const fn error_code_from_value(value: i32) -> Option<ErrorCode> {
         1200 => Some(ErrorCode::RuntimeUnavailable),
         1201 => Some(ErrorCode::RuntimeShuttingDown),
         1300 => Some(ErrorCode::EngineUnavailable),
+        1301 => Some(ErrorCode::InvalidArgument),
+        1302 => Some(ErrorCode::InvalidState),
+        1303 => Some(ErrorCode::BufferTooSmall),
         1900 => Some(ErrorCode::InternalError),
         _ => None,
     }
@@ -73,6 +79,9 @@ pub const fn error_code_category(code: ErrorCode) -> ErrorCategory {
         ErrorCode::RuntimeUnavailable => ErrorCategory::Runtime,
         ErrorCode::RuntimeShuttingDown => ErrorCategory::Runtime,
         ErrorCode::EngineUnavailable => ErrorCategory::Engine,
+        ErrorCode::InvalidArgument => ErrorCategory::Engine,
+        ErrorCode::InvalidState => ErrorCategory::Engine,
+        ErrorCode::BufferTooSmall => ErrorCategory::Engine,
         ErrorCode::InternalError => ErrorCategory::Internal,
     }
 }
