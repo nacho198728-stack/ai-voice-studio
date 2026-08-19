@@ -21,16 +21,65 @@ std::string bounded_diagnostic(std::string_view value) {
   return std::string(value.substr(0U, kMaximumLogDiagnosticBytes));
 }
 
-std::string_view truncate_utf8(std::string_view value, std::size_t maximum) noexcept {
-  if (value.size() <= maximum) {
-    return value;
+std::size_t valid_utf8_sequence_length(std::string_view value, std::size_t offset) noexcept {
+  const auto available = value.size() - offset;
+  const auto first = static_cast<unsigned char>(value[offset]);
+  const auto continuation = [&](std::size_t index) {
+    return index < available &&
+           (static_cast<unsigned char>(value[offset + index]) & 0xC0U) == 0x80U;
+  };
+  if (first <= 0x7FU) {
+    return 1U;
   }
-  auto boundary = maximum;
-  while (boundary > 0U &&
-         (static_cast<unsigned char>(value[boundary]) & 0xC0U) == 0x80U) {
-    --boundary;
+  if (first >= 0xC2U && first <= 0xDFU && continuation(1U)) {
+    return 2U;
   }
-  return value.substr(0U, boundary);
+  if (available >= 3U && continuation(1U) && continuation(2U) &&
+      ((first == 0xE0U && static_cast<unsigned char>(value[offset + 1U]) >= 0xA0U) ||
+       (first >= 0xE1U && first <= 0xECU) ||
+       (first == 0xEDU && static_cast<unsigned char>(value[offset + 1U]) <= 0x9FU) ||
+       (first >= 0xEEU && first <= 0xEFU))) {
+    return 3U;
+  }
+  if (available >= 4U && continuation(1U) && continuation(2U) && continuation(3U) &&
+      ((first == 0xF0U && static_cast<unsigned char>(value[offset + 1U]) >= 0x90U) ||
+       (first >= 0xF1U && first <= 0xF3U) ||
+       (first == 0xF4U && static_cast<unsigned char>(value[offset + 1U]) <= 0x8FU))) {
+    return 4U;
+  }
+  return 0U;
+}
+
+bool is_valid_utf8(std::string_view value) noexcept {
+  for (std::size_t offset = 0U; offset < value.size();) {
+    const auto length = valid_utf8_sequence_length(value, offset);
+    if (length == 0U) {
+      return false;
+    }
+    offset += length;
+  }
+  return true;
+}
+
+std::string sanitize_bounded_utf8(std::string_view value, std::size_t maximum) {
+  constexpr std::string_view replacement = "\xEF\xBF\xBD";
+  std::string output;
+  output.reserve(std::min(value.size(), maximum));
+  for (std::size_t offset = 0U; offset < value.size();) {
+    const auto length = valid_utf8_sequence_length(value, offset);
+    const auto emitted_length = length == 0U ? replacement.size() : length;
+    if (output.size() + emitted_length > maximum) {
+      break;
+    }
+    if (length == 0U) {
+      output.append(replacement);
+      ++offset;
+    } else {
+      output.append(value.substr(offset, length));
+      offset += length;
+    }
+  }
+  return output;
 }
 
 void append_json_string(std::string& output, std::string_view value) {
@@ -198,11 +247,12 @@ RuntimeLogger& RuntimeLogger::operator=(RuntimeLogger&&) noexcept = default;
 RuntimeLoggerInitialization RuntimeLogger::initialize(RuntimeLoggingConfig config) noexcept {
   try {
     if (!config.directory.is_absolute() || config.component.empty() ||
-        config.component.size() > kMaximumLogComponentBytes) {
+        config.component.size() > kMaximumLogComponentBytes ||
+        !is_valid_utf8(config.component)) {
       return {
           nullptr,
           bounded_diagnostic(
-              "runtime logging requires an absolute directory and bounded non-empty component"),
+              "runtime logging requires an absolute directory and bounded valid UTF-8 component"),
       };
     }
     std::error_code error;
@@ -254,7 +304,7 @@ void RuntimeLogger::log(
     record.append(R"(,"level":)");
     append_json_string(record, log_level_name(level));
     record.append(R"(,"message":)");
-    append_json_string(record, truncate_utf8(message, kMaximumLogMessageBytes));
+    append_json_string(record, sanitize_bounded_utf8(message, kMaximumLogMessageBytes));
     if (implementation_->generation_.has_value()) {
       fields.generation = implementation_->generation_;
     }

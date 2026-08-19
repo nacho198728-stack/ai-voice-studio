@@ -11,7 +11,9 @@ generation. The Runtime never reads logging configuration from environment
 variables or the current working directory. Its non-global spdlog instance
 writes unified JSONL synchronously to stderr and `voice-runtime.jsonl`; logger
 destruction flushes the file. Initialization failure exits with an actionable
-stderr diagnostic before any stdout frame is written.
+stderr diagnostic before any stdout frame is written. Logger initialization
+rejects an invalid UTF-8 component, while invalid message byte sequences are
+replaced with U+FFFD before the result is truncated at a UTF-8 boundary.
 
 No logging dependency enters the Mock engine target. In particular,
 `mock_process_audio` contains no log call, allocation, or lock and continues to
