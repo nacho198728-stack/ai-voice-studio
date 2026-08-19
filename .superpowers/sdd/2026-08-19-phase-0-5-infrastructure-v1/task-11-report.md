@@ -16,30 +16,42 @@ modified; ADR-003 remains reserved for Phase 1.
   PCM, payload bodies, secrets, model contents, or resource paths.
 - `core/telemetry` owns the process-global Rust `tracing` subscriber. It writes
   `runtime-host.jsonl` through a bounded `tracing-appender` worker and mirrors
-  the same JSONL to stderr. Directory/file errors occur before global
+  the same JSONL to stderr. Its custom formatter normalizes every direct
+  `tracing` event into the closed schema, derives lowercase level from
+  metadata, bounds formatting without first allocating unbounded strings, and
+  discards unknown fields. Directory/file errors occur before global
   registration, repeated registration is typed and deterministic, and the
   returned guard drains accepted records on drop.
 - The native Runtime owns an independent, non-global, synchronous spdlog
   logger. It appends `voice-runtime.jsonl`, mirrors JSONL to stderr, and never
   writes text to stdout. Logger construction and destruction are explicit;
   initialization is no-throw, errors are bounded/actionable, and destruction
-  flushes both sinks.
+  flushes both sinks. Invalid UTF-8 components fail before directory creation;
+  malformed message sequences become U+FFFD before UTF-8-safe byte bounding.
 - RuntimeManager emits actor lifecycle/request events without adding locks or
   changing selection/reap ordering. It explicitly passes the resolved log
-  directory, effective level, and manager generation to each child. The
-  manager generation is used only for logging; the existing process-local
-  Hello generation remains canonical `1`, so the IPC contract is unchanged.
+  directory, validated logging policy, explicit debug-authority bit, and
+  manager generation to each child. Rust telemetry cannot accept a bare level
+  as authority; a disabled verbose request clamps to info. Native option
+  parsing rejects missing debug authority and false+trace/debug before logger
+  creation. The manager generation is used only for logging; the existing
+  process-local Hello generation remains canonical `1`, so IPC is unchanged.
 - `debug.development_log_directory` is a bounded portable relative path.
   RuntimeHost resolves it only against an explicit absolute host-owned base.
-  Absolute, drive-qualified, backslash, empty, dot, parent, NUL, and oversized
-  paths fail validation. Trace/debug is clamped to info unless
-  `debug.enabled=true`, and RuntimeManager validates the gate again.
+  Absolute, drive-qualified, backslash, empty, dot, parent, NUL, reserved
+  characters/control characters, Windows device stems (including extension
+  forms), trailing dot/space, and oversized paths fail validation on every
+  platform. Trace/debug is representable in logging authority only with
+  `debug.enabled=true`.
 - Rust uses Unicode `PathBuf`/`OsStr`; native Windows argument parsing retains
   wide paths and spdlog is compiled with `SPDLOG_WCHAR_FILENAMES`. No logging
   setting is inferred from the environment or current working directory.
-- Mock `process_audio` has no logger dependency or call. Its source contract
-  test isolates the hot path, rejects common logging tokens, and verifies that
-  the existing relaxed atomic metric updates remain present.
+- Mock `process_audio` has no logger dependency or call. Configure-time guards
+  pin its complete target dependency surface; a SHA-256 contract pins the
+  entire reviewed callback body and exact relaxed atomic updates. The dynamic
+  test invokes success/failure paths six times under an OS-level stderr byte
+  counter, asserts zero bytes, and then verifies exact process/frame/error
+  metrics.
 
 ## Reproducible dependencies and licensing
 
@@ -93,6 +105,23 @@ modified; ADR-003 remains reserved for Phase 1.
   exercise events before and during IPC, Unicode plugin/log paths, malformed
   CLI, missing/unsupported/failing plugins, and a blocked log directory.
   Every setup/logging failure keeps stdout empty.
+- Review P1 RED proved native `--log-level debug` worked without debug
+  authority. GREEN replaces raw Rust/native authority with validated policy,
+  requires explicit `--debug-enabled`, rejects an inconsistent native pair in
+  a real process, and proves disabled Rust debug requests filter helper and
+  direct events.
+- Review schema RED showed a direct `tracing` event could omit required fields
+  and flatten arbitrary data. GREEN's schema formatter normalizes empty/
+  oversized fields, supplies a fixed missing message, ignores secrets/unknown
+  fields, admits only unsigned correlation, and keeps all records parseable.
+- Review portability RED accepted `CON`; GREEN rejects the complete requested
+  reserved-device set case-insensitively (including extensions), trailing
+  dot/space, control characters, and Windows reserved punctuation independent
+  of the build platform.
+- Review UTF-8 RED accepted an invalid native component. GREEN validates
+  overlong, surrogate, out-of-range, lone-continuation, and truncated sequences;
+  native tests parse every JSONL line and cover escaped controls plus exact
+  accepted/rejected 512-byte multibyte boundaries.
 
 ## Verification
 
@@ -116,6 +145,9 @@ modified; ADR-003 remains reserved for Phase 1.
 ## Commit
 
 - `466b527` — `feat(logging): add unified structured telemetry`
+- `9d99ac6` — `docs(logging): record task 11 evidence`
+- `0d418eb` — `fix(logging): guarantee valid UTF-8 JSONL`
+- `065a68c` — `fix(logging): enforce validated logging authority`
 
 ## Self-review and concerns
 
