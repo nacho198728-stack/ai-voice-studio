@@ -58,7 +58,7 @@
 
 - [x] 在 Rust workspace 建立协议 contract test。验证 RuntimeMessage、ErrorCode、版本兼容和非法消息拒绝行为。
 
-- [ ] 在 `tests/runtime` 建立进程集成测试。覆盖启动、握手、能力查询、优雅关闭、异常退出和无孤儿进程。
+- [x] 在 `tests/runtime` 建立进程集成测试。覆盖启动、握手、能力查询、优雅关闭、异常退出和无孤儿进程。
 
 - [ ] 在 `tests/benchmark` 建立 Mock Pipeline 测试。验证确定性输出、模拟延迟、reset、metrics 和返回校验值。
 
