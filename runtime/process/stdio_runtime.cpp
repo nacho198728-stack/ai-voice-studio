@@ -203,23 +203,11 @@ ProcessExitCode run_stdio(
   }
 }
 
-ProcessExitCode run_native_stdio(int argc, char** argv) noexcept {
+namespace {
+
+ProcessExitCode run_native_with_options(RuntimeOptionsParseResult parsed) noexcept {
   std::unique_ptr<MockPipeline> pipeline;
   try {
-    if (argc < 1 || argv == nullptr) {
-      diagnostic(std::cerr, "voice-runtime: invalid process arguments");
-      return ProcessExitCode::UnexpectedFailure;
-    }
-    std::vector<std::string_view> arguments;
-    arguments.reserve(static_cast<std::size_t>(argc - 1));
-    for (int index = 1; index < argc; ++index) {
-      if (argv[index] == nullptr) {
-        diagnostic(std::cerr, "voice-runtime: invalid null command-line argument");
-        return ProcessExitCode::UnexpectedFailure;
-      }
-      arguments.emplace_back(argv[index]);
-    }
-    const auto parsed = parse_runtime_options(arguments);
     if (!parsed.options.has_value()) {
       diagnostic(std::cerr, parsed.diagnostic);
       return ProcessExitCode::UnexpectedFailure;
@@ -244,6 +232,39 @@ ProcessExitCode run_native_stdio(int argc, char** argv) noexcept {
   NativeStdinReader input;
   NativeStdoutWriter output;
   return run_stdio(input, output, std::cerr, 1U, pipeline.get());
+}
+
+template <typename Character>
+ProcessExitCode run_native_arguments(int argc, Character** argv) noexcept {
+  try {
+    if (argc < 1 || argv == nullptr) {
+      diagnostic(std::cerr, "voice-runtime: invalid process arguments");
+      return ProcessExitCode::UnexpectedFailure;
+    }
+    std::vector<std::basic_string_view<Character>> arguments;
+    arguments.reserve(static_cast<std::size_t>(argc - 1));
+    for (int index = 1; index < argc; ++index) {
+      if (argv[index] == nullptr) {
+        diagnostic(std::cerr, "voice-runtime: invalid null command-line argument");
+        return ProcessExitCode::UnexpectedFailure;
+      }
+      arguments.emplace_back(argv[index]);
+    }
+    return run_native_with_options(parse_runtime_options(arguments));
+  } catch (...) {
+    diagnostic(std::cerr, "voice-runtime: argument collection failed unexpectedly");
+    return ProcessExitCode::UnexpectedFailure;
+  }
+}
+
+}  // namespace
+
+ProcessExitCode run_native_stdio(int argc, char** argv) noexcept {
+  return run_native_arguments(argc, argv);
+}
+
+ProcessExitCode run_native_stdio(int argc, wchar_t** argv) noexcept {
+  return run_native_arguments(argc, argv);
 }
 
 }  // namespace ai_voice::runtime

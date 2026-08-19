@@ -35,7 +35,7 @@ class MockPipeline final : public PipelineService {
   ~MockPipeline() override = default;
 
   [[nodiscard]] bool available() const noexcept override;
-  PipelineRunResult run(std::span<const std::uint8_t> request_payload) noexcept override;
+  PipelineRunResult run(std::span<const std::uint8_t> request_payload) override;
 
  private:
   explicit MockPipeline(std::unique_ptr<VoiceEngineInstance> engine) noexcept;

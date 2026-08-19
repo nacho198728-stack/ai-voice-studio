@@ -35,8 +35,8 @@ void close_library(void* handle) noexcept {
   }
 }
 
-std::string platform_error(std::string_view prefix) {
-  return bounded(std::string(prefix) + ": Windows error " + std::to_string(GetLastError()));
+std::string platform_error(std::string_view prefix, DWORD error) {
+  return bounded(std::string(prefix) + ": Windows error " + std::to_string(error));
 }
 #else
 void close_library(void* handle) noexcept {
@@ -56,6 +56,25 @@ std::string platform_error(std::string_view prefix) {
 }
 #endif
 
+class NativeLibraryGuard {
+ public:
+  explicit NativeLibraryGuard(void* handle) noexcept : handle_(handle) {}
+  NativeLibraryGuard(const NativeLibraryGuard&) = delete;
+  NativeLibraryGuard& operator=(const NativeLibraryGuard&) = delete;
+  ~NativeLibraryGuard() { close_library(handle_); }
+
+  [[nodiscard]] void* get() const noexcept { return handle_; }
+
+  [[nodiscard]] void* release() noexcept {
+    void* released = handle_;
+    handle_ = nullptr;
+    return released;
+  }
+
+ private:
+  void* handle_;
+};
+
 }  // namespace
 
 VoiceEngineModule::VoiceEngineModule(void* native_handle, aivs_voice_engine_api_t api) noexcept
@@ -71,30 +90,48 @@ VoiceEngineLoadResult VoiceEngineModule::load(
     const std::filesystem::path& explicit_path) noexcept {
   try {
     if (explicit_path.empty() || !explicit_path.is_absolute() ||
-        explicit_path.native().size() > kMaximumPluginPathCharacters) {
+        explicit_path.native().size() > kMaximumPluginPathCharacters ||
+        explicit_path.native().find(std::filesystem::path::value_type{}) !=
+            std::filesystem::path::string_type::npos) {
       return {nullptr, ErrorCode::InvalidArgument, "VoiceEngine path must be an explicit bounded absolute path"};
     }
 
     void* handle = nullptr;
 #if defined(_WIN32)
     handle = static_cast<void*>(LoadLibraryW(explicit_path.c_str()));
+    const DWORD load_error = handle == nullptr ? GetLastError() : ERROR_SUCCESS;
 #else
     static_cast<void>(dlerror());
     handle = dlopen(explicit_path.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif
     if (handle == nullptr) {
+#if defined(_WIN32)
+      return {
+          nullptr,
+          ErrorCode::EngineUnavailable,
+          platform_error("could not load VoiceEngine", load_error),
+      };
+#else
       return {nullptr, ErrorCode::EngineUnavailable, platform_error("could not load VoiceEngine")};
+#endif
     }
+    NativeLibraryGuard library(handle);
 
 #if defined(_WIN32)
-    const auto symbol = GetProcAddress(static_cast<HMODULE>(handle), "aivs_voice_engine_get_api");
+    const auto symbol =
+        GetProcAddress(static_cast<HMODULE>(library.get()), "aivs_voice_engine_get_api");
+    const DWORD symbol_error = symbol == nullptr ? GetLastError() : ERROR_SUCCESS;
 #else
     static_cast<void>(dlerror());
-    const auto symbol = dlsym(handle, "aivs_voice_engine_get_api");
+    const auto symbol = dlsym(library.get(), "aivs_voice_engine_get_api");
 #endif
     if (symbol == nullptr) {
+#if defined(_WIN32)
+      const auto diagnostic =
+          platform_error("VoiceEngine factory export is missing", symbol_error);
+#else
       const auto diagnostic = platform_error("VoiceEngine factory export is missing");
-      close_library(handle);
+#endif
       return {nullptr, ErrorCode::EngineUnavailable, diagnostic};
     }
     aivs_voice_engine_get_api_fn factory{};
@@ -107,21 +144,21 @@ VoiceEngineLoadResult VoiceEngineModule::load(
     try {
       factory_result = factory(&request, &api, sizeof(api));
     } catch (...) {
-      close_library(handle);
       return {nullptr, ErrorCode::InternalError, "VoiceEngine factory threw across the C boundary"};
     }
     const auto mapped = from_abi(factory_result);
     if (mapped != ErrorCode::Success ||
         aivs_voice_engine_api_is_complete_for_version(&api, api.abi_version) != AIVS_TRUE) {
-      close_library(handle);
       return {
           nullptr,
           mapped == ErrorCode::Success ? ErrorCode::UnsupportedVoiceEngineAbi : mapped,
           "VoiceEngine factory negotiation failed",
       };
     }
+    auto owner = std::shared_ptr<VoiceEngineModule>(new VoiceEngineModule(nullptr, api));
+    owner->native_handle_ = library.release();
     return {
-        std::shared_ptr<VoiceEngineModule>(new VoiceEngineModule(handle, api)),
+        std::move(owner),
         ErrorCode::Success,
         {},
     };

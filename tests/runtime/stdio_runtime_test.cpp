@@ -17,6 +17,7 @@
 
 #include <ai_voice_contracts/generated_contracts.hpp>
 #include <ai_voice_contracts/runtime_message.hpp>
+#include <ai_voice_runtime/session.hpp>
 #include <ai_voice_runtime/stdio_runtime.hpp>
 
 namespace message = ai_voice::contracts::runtime_message;
@@ -141,6 +142,16 @@ class MemoryWriter final : public runtime::ByteWriter {
   std::size_t flush_count{0U};
   std::size_t fail_on_write{0U};
   bool fail_flush{false};
+};
+
+class AllocationFailurePipeline final : public runtime::PipelineService {
+ public:
+  [[nodiscard]] bool available() const noexcept override { return true; }
+
+  runtime::PipelineRunResult run(std::span<const std::uint8_t>) override {
+    allocation_fault::fail_after(0U);
+    return {ErrorCode::Success, std::vector<std::uint8_t>(1U, 0xA5U)};
+  }
 };
 
 message::RuntimeMessage request(
@@ -306,6 +317,21 @@ void decoder_allocation_failure_is_an_unexpected_process_failure() {
   assert(!diagnostics.str().empty());
 }
 
+void pipeline_dispatch_allocation_failure_stops_after_the_valid_hello() {
+  MemoryReader input(encode_frame(request(1U, message::Command::RunMockPipeline)));
+  MemoryWriter output;
+  std::ostringstream diagnostics;
+  AllocationFailurePipeline pipeline;
+  assert(runtime::run_stdio(input, output, diagnostics, 1U, &pipeline) ==
+         runtime::ProcessExitCode::UnexpectedFailure);
+  allocation_fault::disable();
+  const auto frames = decode_all(output.output);
+  assert(frames.size() == 1U);
+  assert(frames[0].kind == message::MessageKind::Hello);
+  assert(!diagnostics.str().empty());
+  assert(diagnostics.str().size() <= 513U);
+}
+
 }  // namespace
 
 int main() {
@@ -315,4 +341,5 @@ int main() {
   stdout_failure_and_input_failure_have_distinct_exits();
   transport_splits_more_than_one_codec_batch_without_rejecting_valid_sticky_frames();
   decoder_allocation_failure_is_an_unexpected_process_failure();
+  pipeline_dispatch_allocation_failure_stops_after_the_valid_hello();
 }

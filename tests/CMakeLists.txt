@@ -29,6 +29,22 @@ add_test(
   NAME aivs_mock_voice_engine_dynamic_test
   COMMAND aivs_mock_voice_engine_dynamic_test $<TARGET_FILE:aivs_mock_voice_engine>
 )
+
+add_executable(
+  aivs_mock_voice_engine_contract_matrix_test
+  runtime/mock_voice_engine_contract_matrix_test.cpp
+)
+target_link_libraries(
+  aivs_mock_voice_engine_contract_matrix_test
+  PRIVATE ai_voice::voice_engine_abi
+)
+if(CMAKE_DL_LIBS)
+  target_link_libraries(aivs_mock_voice_engine_contract_matrix_test PRIVATE ${CMAKE_DL_LIBS})
+endif()
+add_test(
+  NAME aivs_mock_voice_engine_contract_matrix_test
+  COMMAND aivs_mock_voice_engine_contract_matrix_test $<TARGET_FILE:aivs_mock_voice_engine>
+)
 if(UNIX)
   add_test(
     NAME aivs_mock_voice_engine_exports
@@ -42,13 +58,22 @@ if(UNIX)
 endif()
 
 add_executable(aivs_voice_engine_loader_test runtime/voice_engine_loader_test.cpp)
-target_link_libraries(aivs_voice_engine_loader_test PRIVATE ai_voice::runtime_loader)
+find_package(Threads REQUIRED)
+target_link_libraries(
+  aivs_voice_engine_loader_test
+  PRIVATE ai_voice::runtime_loader Threads::Threads
+)
 add_test(
   NAME aivs_voice_engine_loader_test
   COMMAND
     aivs_voice_engine_loader_test
     $<TARGET_FILE:aivs_mock_voice_engine>
-    $<TARGET_FILE:voice-runtime>
+    $<TARGET_FILE:aivs_fixture_missing_factory>
+    $<TARGET_FILE:aivs_fixture_unsupported_factory>
+    $<TARGET_FILE:aivs_fixture_incomplete_factory>
+    $<TARGET_FILE:aivs_fixture_initialize_failure>
+    $<TARGET_FILE:aivs_fixture_shutdown_failure>
+    $<TARGET_FILE:aivs_fixture_blocking_metrics>
 )
 
 add_executable(aivs_mock_pipeline_test runtime/mock_pipeline_test.cpp)
@@ -79,7 +104,35 @@ add_test(
     ${CMAKE_COMMAND}
     -DVOICE_RUNTIME=$<TARGET_FILE:voice-runtime>
     -DMOCK_PLUGIN=$<TARGET_FILE:aivs_mock_voice_engine>
+    -DUNSUPPORTED_PLUGIN=$<TARGET_FILE:aivs_fixture_unsupported_factory>
+    -DINITIALIZE_FAILURE_PLUGIN=$<TARGET_FILE:aivs_fixture_initialize_failure>
     -DSMOKE_HELPER=$<TARGET_FILE:aivs_voice_runtime_smoke>
     -DSMOKE_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/voice-runtime-smoke
     -P ${CMAKE_CURRENT_SOURCE_DIR}/runtime/voice_runtime_smoke.cmake
 )
+
+add_library(aivs_fixture_missing_factory SHARED fixtures/missing_factory.cpp)
+set_target_properties(
+  aivs_fixture_missing_factory
+  PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES
+)
+
+function(add_voice_engine_failure_fixture target mode)
+  add_library(${target} SHARED fixtures/voice_engine_failure_fixture.cpp)
+  target_link_libraries(${target} PRIVATE ai_voice::voice_engine_abi)
+  target_compile_definitions(
+    ${target}
+    PRIVATE AIVS_VOICE_ENGINE_BUILD AIVS_FAILURE_FIXTURE_MODE=${mode}
+  )
+  set_target_properties(
+    ${target}
+    PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES
+  )
+endfunction()
+
+add_voice_engine_failure_fixture(aivs_fixture_unsupported_factory 1)
+add_voice_engine_failure_fixture(aivs_fixture_incomplete_factory 2)
+add_voice_engine_failure_fixture(aivs_fixture_initialize_failure 3)
+add_voice_engine_failure_fixture(aivs_fixture_shutdown_failure 4)
+add_voice_engine_failure_fixture(aivs_fixture_blocking_metrics 5)
+target_link_libraries(aivs_fixture_blocking_metrics PRIVATE Threads::Threads)

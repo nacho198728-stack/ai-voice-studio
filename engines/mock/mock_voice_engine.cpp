@@ -20,6 +20,12 @@ constexpr std::string_view kEngineName = "AIVS Mock VoiceEngine";
 constexpr std::string_view kEngineVersion = "1.0.0";
 constexpr std::string_view kModelIdentifier = "mock-v1";
 constexpr std::string_view kConfigurationPrefix = R"({"work_iterations":)";
+constexpr std::string_view kInitialGenerationField = R"(,"initial_generation":)";
+
+struct MockConfiguration {
+  std::uint32_t work_iterations;
+  std::uint64_t initial_generation;
+};
 
 enum class EngineState : std::uint8_t {
   Initialized,
@@ -55,35 +61,50 @@ bool valid_mutable_bytes_buffer(const aivs_mutable_bytes_buffer_t& buffer) noexc
          bytes_are_addressable(buffer.data, buffer.capacity_bytes);
 }
 
-bool parse_configuration(const aivs_bytes_view_t& configuration, std::uint32_t& work) noexcept {
-  work = 0U;
+bool parse_canonical_decimal(
+    std::string_view digits, std::uint64_t maximum, std::uint64_t& value) noexcept {
+  value = 0U;
+  if (digits.empty() || (digits.size() > 1U && digits.front() == '0')) {
+    return false;
+  }
+  for (const char digit : digits) {
+    if (digit < '0' || digit > '9') {
+      return false;
+    }
+    const auto number = static_cast<std::uint64_t>(digit - '0');
+    if (value > (maximum - number) / 10U) {
+      return false;
+    }
+    value = value * 10U + number;
+  }
+  return true;
+}
+
+bool parse_configuration(
+    const aivs_bytes_view_t& configuration, MockConfiguration& parsed) noexcept {
+  parsed = {0U, 0U};
   if (!valid_bytes_view(configuration) || configuration.size_bytes > 64U) {
     return false;
   }
   const auto text = std::string_view(
       reinterpret_cast<const char*>(configuration.data),
       static_cast<std::size_t>(configuration.size_bytes));
-  if (!text.starts_with(kConfigurationPrefix) || text.size() <= kConfigurationPrefix.size() + 1U ||
-      text.back() != '}') {
+  if (!text.starts_with(kConfigurationPrefix) || text.back() != '}') {
     return false;
   }
-  const auto digits = text.substr(
-      kConfigurationPrefix.size(), text.size() - kConfigurationPrefix.size() - 1U);
-  if (digits.empty() || (digits.size() > 1U && digits.front() == '0')) {
+  const auto body = text.substr(kConfigurationPrefix.size(), text.size() - kConfigurationPrefix.size() - 1U);
+  const auto generation_position = body.find(kInitialGenerationField);
+  const auto work_digits = body.substr(0U, generation_position);
+  std::uint64_t work = 0U;
+  if (!parse_canonical_decimal(work_digits, kMaximumWorkIterations, work)) {
     return false;
   }
-  std::uint64_t value = 0U;
-  for (const char digit : digits) {
-    if (digit < '0' || digit > '9') {
-      return false;
-    }
-    value = value * 10U + static_cast<std::uint64_t>(digit - '0');
-    if (value > kMaximumWorkIterations) {
-      return false;
-    }
+  parsed.work_iterations = static_cast<std::uint32_t>(work);
+  if (generation_position == std::string_view::npos) {
+    return true;
   }
-  work = static_cast<std::uint32_t>(value);
-  return true;
+  const auto generation_digits = body.substr(generation_position + kInitialGenerationField.size());
+  return parse_canonical_decimal(generation_digits, UINT64_MAX, parsed.initial_generation);
 }
 
 bool view_equals(const aivs_bytes_view_t& view, std::string_view expected) noexcept {
@@ -91,19 +112,12 @@ bool view_equals(const aivs_bytes_view_t& view, std::string_view expected) noexc
          (expected.empty() || std::memcmp(view.data, expected.data(), expected.size()) == 0);
 }
 
-template <typename Result>
-void zero_two_u64(Result* result, std::uint64_t Result::*first, std::uint64_t Result::*second) noexcept {
-  if (result != nullptr && result->struct_size >= sizeof(Result)) {
-    result->*first = 0U;
-    result->*second = 0U;
-  }
-}
-
 }  // namespace
 
 struct aivs_voice_engine_handle {
-  explicit aivs_voice_engine_handle(std::uint32_t configured_work) noexcept
-      : work_iterations(configured_work) {}
+  explicit aivs_voice_engine_handle(MockConfiguration configuration) noexcept
+      : work_iterations(configuration.work_iterations),
+        stream_generation(configuration.initial_generation) {}
 
   EngineState state{EngineState::Initialized};
   std::uint32_t work_iterations{0U};
@@ -130,23 +144,45 @@ void initialize_result_failure(aivs_initialize_result_t* result) noexcept {
 }
 
 void prepare_result_failure(aivs_prepare_stream_result_t* result) noexcept {
-  zero_two_u64(
-      result,
-      &aivs_prepare_stream_result_t::algorithmic_latency_frames,
-      &aivs_prepare_stream_result_t::stream_generation);
+  if (result == nullptr) {
+    return;
+  }
+  if (result->struct_size >= offsetof(aivs_prepare_stream_result_t, algorithmic_latency_frames) +
+                                 sizeof(result->algorithmic_latency_frames)) {
+    result->algorithmic_latency_frames = 0U;
+  }
+  if (result->struct_size >= offsetof(aivs_prepare_stream_result_t, stream_generation) +
+                                 sizeof(result->stream_generation)) {
+    result->stream_generation = 0U;
+  }
 }
 
 void reset_result_failure(aivs_reset_result_t* result) noexcept {
-  if (result != nullptr && result->struct_size >= sizeof(*result)) {
+  if (result != nullptr &&
+      result->struct_size >= offsetof(aivs_reset_result_t, stream_generation) +
+                                 sizeof(result->stream_generation)) {
     result->stream_generation = 0U;
   }
 }
 
 void metrics_failure(aivs_engine_metrics_t* metrics) noexcept {
-  if (metrics != nullptr && metrics->struct_size >= sizeof(*metrics)) {
+  if (metrics == nullptr) {
+    return;
+  }
+  if (metrics->struct_size >= offsetof(aivs_engine_metrics_t, process_call_count) +
+                                  sizeof(metrics->process_call_count)) {
     metrics->process_call_count = 0U;
+  }
+  if (metrics->struct_size >= offsetof(aivs_engine_metrics_t, input_frame_count) +
+                                  sizeof(metrics->input_frame_count)) {
     metrics->input_frame_count = 0U;
+  }
+  if (metrics->struct_size >= offsetof(aivs_engine_metrics_t, output_frame_count) +
+                                  sizeof(metrics->output_frame_count)) {
     metrics->output_frame_count = 0U;
+  }
+  if (metrics->struct_size >= offsetof(aivs_engine_metrics_t, process_error_count) +
+                                  sizeof(metrics->process_error_count)) {
     metrics->process_error_count = 0U;
   }
 }
@@ -169,6 +205,23 @@ void info_failure(aivs_engine_info_t* info, bool shortage = false) noexcept {
       info->engine_version_utf8.struct_size >= nested_count_end) {
     info->engine_version_utf8.written_or_required_bytes = shortage ? kEngineVersion.size() : 0U;
   }
+}
+
+bool info_output_ranges_are_disjoint(const aivs_engine_info_t& info) noexcept {
+  const auto name_start = reinterpret_cast<std::uintptr_t>(info.engine_name_utf8.data);
+  const auto version_start = reinterpret_cast<std::uintptr_t>(info.engine_version_utf8.data);
+  if ((info.engine_name_utf8.data != nullptr &&
+       name_start > UINTPTR_MAX - kEngineName.size()) ||
+      (info.engine_version_utf8.data != nullptr &&
+       version_start > UINTPTR_MAX - kEngineVersion.size())) {
+    return false;
+  }
+  if (info.engine_name_utf8.data == nullptr || info.engine_version_utf8.data == nullptr) {
+    return true;
+  }
+  const auto name_end = name_start + kEngineName.size();
+  const auto version_end = version_start + kEngineVersion.size();
+  return name_end <= version_start || version_end <= name_start;
 }
 
 std::uint32_t nested_process_capacity(
@@ -203,12 +256,12 @@ aivs_error_code_t AIVS_VOICE_ENGINE_CALL mock_initialize(
       !reserved_are_zero(request->reserved) || !reserved_are_zero(result->reserved)) {
     return AIVS_ERROR_INVALID_ARGUMENT;
   }
-  std::uint32_t work_iterations = 0U;
-  if (!parse_configuration(request->configuration_utf8, work_iterations)) {
+  MockConfiguration configuration{};
+  if (!parse_configuration(request->configuration_utf8, configuration)) {
     return AIVS_ERROR_INVALID_ARGUMENT;
   }
   try {
-    result->engine = new (std::nothrow) aivs_voice_engine_handle(work_iterations);
+    result->engine = new (std::nothrow) aivs_voice_engine_handle(configuration);
   } catch (...) {
     result->engine = nullptr;
   }
@@ -233,6 +286,9 @@ aivs_error_code_t AIVS_VOICE_ENGINE_CALL mock_get_engine_info(
       info->abi_version != AIVS_VOICE_ENGINE_ABI_V1_VERSION ||
       !reserved_are_zero(info->reserved) || !valid_mutable_bytes_buffer(info->engine_name_utf8) ||
       !valid_mutable_bytes_buffer(info->engine_version_utf8)) {
+    return AIVS_ERROR_INVALID_ARGUMENT;
+  }
+  if (!info_output_ranges_are_disjoint(*info)) {
     return AIVS_ERROR_INVALID_ARGUMENT;
   }
   if (info->engine_name_utf8.capacity_bytes < kEngineName.size() ||

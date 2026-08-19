@@ -54,5 +54,6 @@ enum class ProcessExitCode : int {
     PipelineService* pipeline = nullptr) noexcept;
 
 [[nodiscard]] ProcessExitCode run_native_stdio(int argc, char** argv) noexcept;
+[[nodiscard]] ProcessExitCode run_native_stdio(int argc, wchar_t** argv) noexcept;
 
 }  // namespace ai_voice::runtime

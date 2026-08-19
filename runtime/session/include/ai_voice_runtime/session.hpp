@@ -63,7 +63,7 @@ class PipelineService {
  public:
   virtual ~PipelineService() = default;
   [[nodiscard]] virtual bool available() const noexcept = 0;
-  virtual PipelineRunResult run(std::span<const std::uint8_t> request_payload) noexcept = 0;
+  virtual PipelineRunResult run(std::span<const std::uint8_t> request_payload) = 0;
 };
 
 class Session {

@@ -24,7 +24,7 @@ class FixedPipeline final : public runtime::PipelineService {
  public:
   [[nodiscard]] bool available() const noexcept override { return true; }
 
-  runtime::PipelineRunResult run(std::span<const std::uint8_t> request_payload) noexcept override {
+  runtime::PipelineRunResult run(std::span<const std::uint8_t> request_payload) override {
     last_request.assign(request_payload.begin(), request_payload.end());
     return {ErrorCode::Success, {0x01U, 0x02U, 0x03U}};
   }

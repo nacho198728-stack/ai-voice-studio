@@ -15,7 +15,7 @@ namespace runtime = ai_voice::runtime;
 namespace {
 
 void empty_arguments_preserve_the_engine_unavailable_mode() {
-  const auto result = runtime::parse_runtime_options({});
+  const auto result = runtime::parse_runtime_options(std::span<const std::string_view>{});
   assert(result.options.has_value());
   assert(!result.options->plugin_path.has_value());
   assert(result.options->mock_work_iterations == 0U);
@@ -56,10 +56,35 @@ void malformed_unknown_duplicate_or_implicit_inputs_are_rejected() {
   assert(!runtime::parse_runtime_options(work_without_plugin).options.has_value());
 }
 
+void wide_arguments_preserve_unicode_paths_and_reject_embedded_nul() {
+#if defined(_WIN32)
+  constexpr std::wstring_view unicode_path = L"C:\\tmp\\AI-Voice-声音\\mock-engine";
+  constexpr std::u8string_view expected_path = u8"C:/tmp/AI-Voice-声音/mock-engine";
+#else
+  constexpr std::wstring_view unicode_path = L"/tmp/AI-Voice-声音/mock-engine";
+  constexpr std::u8string_view expected_path = u8"/tmp/AI-Voice-声音/mock-engine";
+#endif
+  const std::array<std::wstring_view, 4> arguments{
+      L"--plugin", unicode_path, L"--mock-work-iterations", L"42"};
+  const auto result = runtime::parse_runtime_options(arguments);
+  assert(result.options.has_value());
+  assert(result.options->plugin_path.has_value());
+  assert(result.options->plugin_path->generic_u8string() == expected_path);
+  assert(result.options->mock_work_iterations == 42U);
+
+  const std::wstring embedded_nul = std::wstring(L"/tmp/plugin") + L'\0' + L"suffix";
+  const std::array<std::wstring_view, 2> invalid{
+      L"--plugin", std::wstring_view(embedded_nul.data(), embedded_nul.size())};
+  const auto rejected = runtime::parse_runtime_options(invalid);
+  assert(!rejected.options.has_value());
+  assert(!rejected.diagnostic.empty());
+}
+
 }  // namespace
 
 int main() {
   empty_arguments_preserve_the_engine_unavailable_mode();
   explicit_absolute_plugin_and_bounded_work_are_accepted_in_either_order();
   malformed_unknown_duplicate_or_implicit_inputs_are_rejected();
+  wide_arguments_preserve_unicode_paths_and_reject_embedded_nul();
 }

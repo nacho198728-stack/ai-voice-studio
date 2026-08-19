@@ -105,13 +105,15 @@ void complete_lifecycle_uses_all_eight_operations_through_the_dynamic_table(cons
   info.engine_version_utf8.data = version.data();
   info.engine_version_utf8.capacity_bytes = version.size();
 
-  std::array<std::uint8_t, 1> short_name{0xA5U};
-  std::array<std::uint8_t, 1> short_version{0x5AU};
+  std::array<std::uint8_t, 64> short_name{};
+  std::array<std::uint8_t, 32> short_version{};
+  short_name[0] = 0xA5U;
+  short_version[0] = 0x5AU;
   auto short_info = aivs_engine_info_t AIVS_ENGINE_INFO_INIT;
   short_info.engine_name_utf8.data = short_name.data();
-  short_info.engine_name_utf8.capacity_bytes = short_name.size();
+  short_info.engine_name_utf8.capacity_bytes = 1U;
   short_info.engine_version_utf8.data = short_version.data();
-  short_info.engine_version_utf8.capacity_bytes = short_version.size();
+  short_info.engine_version_utf8.capacity_bytes = 1U;
   assert(api.get_engine_info(engine, &short_info) == AIVS_ERROR_BUFFER_TOO_SMALL);
   assert(short_name[0] == 0xA5U);
   assert(short_version[0] == 0x5AU);

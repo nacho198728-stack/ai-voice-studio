@@ -24,5 +24,7 @@ struct RuntimeOptionsParseResult {
 
 RuntimeOptionsParseResult parse_runtime_options(
     std::span<const std::string_view> arguments) noexcept;
+RuntimeOptionsParseResult parse_runtime_options(
+    std::span<const std::wstring_view> arguments) noexcept;
 
 }  // namespace ai_voice::runtime

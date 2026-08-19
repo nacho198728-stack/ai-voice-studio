@@ -82,9 +82,14 @@ Process exit values are:
 `--plugin <absolute-path>` plus optional
 `--mock-work-iterations <0..1000000>` in either order. Unknown, duplicate,
 missing, relative, or malformed arguments are rejected; configuration is never
-read from environment variables or a search path. The Mock configuration sent
-to the plugin is the strict UTF-8 form `{"work_iterations":N}`. The simulated
-model contract is identifier `mock-v1` with an empty model-data view.
+read from environment variables or a search path. Windows enters through wide
+`wmain` arguments and keeps the plugin path wide through `LoadLibraryW`; all
+platforms reject embedded NUL before the native loader. The Mock configuration
+sent by Runtime is the strict UTF-8 form `{"work_iterations":N}`. For ABI
+generation-exhaustion contract tests only, the plugin also accepts the exact
+form `{"work_iterations":N,"initial_generation":G}`, where `G` is canonical
+decimal `0..UINT64_MAX`; Runtime CLI never emits this seam. The simulated model
+contract is identifier `mock-v1` with an empty model-data view.
 
 The Mock accepts float32 interleaved PCM at 8–192 kHz, one or two channels, a
 nonzero stream id, and 1–4096 maximum frames. It precomputes state at prepare,
@@ -92,6 +97,11 @@ flips only the sign bit of each float during process (including exact in-place),
 and performs optional bounded deterministic CPU work. The hot call allocates
 nothing, takes no blocking lock, and performs no I/O, logging, clock, or
 environment access; Runtime measures time around it.
+
+Pipeline result construction is allowed to allocate and is therefore not a
+`noexcept` interface. Allocation failure propagates to the stdio process
+boundary, which exits `4`, writes a bounded stderr diagnostic, and never appends
+partial protocol bytes after any frame already written successfully.
 
 The native adapter derives its 2,048-byte read size from the shared 32-byte
 header and 64-message feed cap. That keeps every feed below both the shared

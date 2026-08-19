@@ -154,7 +154,7 @@ bool MockPipeline::available() const noexcept {
 }
 
 PipelineRunResult MockPipeline::run(
-    std::span<const std::uint8_t> request_payload) noexcept {
+    std::span<const std::uint8_t> request_payload) {
   if (!request_payload.empty()) {
     return failure(ErrorCode::InvalidArgument, R"({"error":"invalid_mock_pipeline_request"})");
   }

@@ -1,4 +1,6 @@
-if(NOT DEFINED VOICE_RUNTIME OR NOT DEFINED MOCK_PLUGIN OR NOT DEFINED SMOKE_HELPER OR NOT DEFINED SMOKE_DIRECTORY)
+if(NOT DEFINED VOICE_RUNTIME OR NOT DEFINED MOCK_PLUGIN OR
+   NOT DEFINED UNSUPPORTED_PLUGIN OR NOT DEFINED INITIALIZE_FAILURE_PLUGIN OR
+   NOT DEFINED SMOKE_HELPER OR NOT DEFINED SMOKE_DIRECTORY)
   message(FATAL_ERROR "voice-runtime smoke arguments are required")
 endif()
 
@@ -17,6 +19,12 @@ set(invalid_stderr "${SMOKE_DIRECTORY}/invalid-stderr.txt")
 set(missing_output "${SMOKE_DIRECTORY}/missing-output.bin")
 set(missing_stderr "${SMOKE_DIRECTORY}/missing-stderr.txt")
 file(WRITE "${empty_input}" "")
+
+get_filename_component(mock_plugin_extension "${MOCK_PLUGIN}" EXT)
+set(unicode_plugin_directory "${SMOKE_DIRECTORY}/Unicode-声音-路径")
+set(unicode_plugin "${unicode_plugin_directory}/Mock-引擎${mock_plugin_extension}")
+file(MAKE_DIRECTORY "${unicode_plugin_directory}")
+file(COPY_FILE "${MOCK_PLUGIN}" "${unicode_plugin}" ONLY_IF_DIFFERENT)
 
 execute_process(
   COMMAND "${VOICE_RUNTIME}"
@@ -79,7 +87,7 @@ if(NOT write_pipeline_result EQUAL 0)
   message(FATAL_ERROR "could not prepare mock pipeline frames")
 endif()
 execute_process(
-  COMMAND "${VOICE_RUNTIME}" --plugin "${MOCK_PLUGIN}" --mock-work-iterations 0
+  COMMAND "${VOICE_RUNTIME}" --plugin "${unicode_plugin}" --mock-work-iterations 0
   INPUT_FILE "${pipeline_input}"
   OUTPUT_FILE "${pipeline_output}"
   ERROR_FILE "${pipeline_stderr}"
@@ -136,3 +144,27 @@ file(SIZE "${missing_stderr}" missing_stderr_size)
 if(NOT missing_output_size EQUAL 0 OR missing_stderr_size EQUAL 0)
   message(FATAL_ERROR "voice-runtime setup failure contaminated stdout or omitted stderr")
 endif()
+
+function(assert_plugin_setup_failure name plugin)
+  set(output "${SMOKE_DIRECTORY}/${name}-output.bin")
+  set(stderr "${SMOKE_DIRECTORY}/${name}-stderr.txt")
+  execute_process(
+    COMMAND "${VOICE_RUNTIME}" --plugin "${plugin}"
+    INPUT_FILE "${empty_input}"
+    OUTPUT_FILE "${output}"
+    ERROR_FILE "${stderr}"
+    RESULT_VARIABLE result
+    TIMEOUT 5
+  )
+  if(NOT result EQUAL 4)
+    message(FATAL_ERROR "voice-runtime ${name} setup exit was not 4: ${result}")
+  endif()
+  file(SIZE "${output}" output_size)
+  file(SIZE "${stderr}" stderr_size)
+  if(NOT output_size EQUAL 0 OR stderr_size EQUAL 0)
+    message(FATAL_ERROR "voice-runtime ${name} setup failure violated stdout/stderr boundary")
+  endif()
+endfunction()
+
+assert_plugin_setup_failure("unsupported-factory" "${UNSUPPORTED_PLUGIN}")
+assert_plugin_setup_failure("initialize-failure" "${INITIALIZE_FAILURE_PLUGIN}")
