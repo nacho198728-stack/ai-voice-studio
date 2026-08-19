@@ -2,17 +2,18 @@
 
 ## Status and commits
 
-Complete on macOS arm64, including review-fix round 1.
+Complete on macOS arm64, including review-fix rounds 1 and 2.
 
 - `1be4308` — `feat(runtime): add dynamic mock voice pipeline`
 - `8709064` — `fix(runtime): harden mock plugin contract closure`
+- `332be11` — `fix(mock): isolate generation exhaustion test seam`
 
 The approved plan checkbox and frozen `runtime/api/voice_engine.h` / `docs/contracts/voice-engine-c-abi-v1.md` were not modified.
 
 ## Delivered behavior
 
 - `aivs_mock_voice_engine` is a hidden-by-default shared library whose production export surface is only `aivs_voice_engine_get_api`. It implements all eight frozen VoiceEngine v1 operations through the negotiated table.
-- Normal Mock configuration remains the exact UTF-8 form `{"work_iterations":N}` for `0..1000000`. A bounded, strict test-only form, `{"work_iterations":N,"initial_generation":G}`, seeds generation for exhaustion tests; Runtime CLI never emits it. The only model is `mock-v1` with empty data.
+- Production Mock configuration is exactly the UTF-8 form `{"work_iterations":N}` for `0..1000000`; extra fields, including `initial_generation`, are rejected. The only model is `mock-v1` with empty data.
 - Prepare accepts float32 interleaved PCM at 8–192 kHz, one or two channels, nonzero stream id, and 1–4096 frames. Process flips each IEEE-754 sign bit, supports disjoint out-of-place and exact in-place buffers, and permits zero frames.
 - `process_audio` retains its hot-path constraints: no allocation, blocking lock, I/O, logging, clock, or environment access. Runtime allocates buffers and measures elapsed time outside the ABI call. Metrics/work state uses compile-time-verified lock-free 64-bit atomics.
 - Engine-info rejects exact or partial overlap of the two actual output write ranges before capacity or lifecycle evaluation. Failure normalization respects each caller-visible struct prefix.
@@ -31,12 +32,14 @@ The ABI matrix calls the function table obtained from the loaded shared library.
 - initialize outer/nested/result validation, strict configuration rejection, successful setup, and allocation/result normalization;
 - model identifier and model-data validation, including wrong identifier with non-empty data;
 - operation-specific request/result prefix, version, and reserved validation, plus argument-before-state/format precedence;
-- prepare/reset invalid states and preservation, reset/prepare generation exhaustion, and retryable shutdown;
+- prepare/reset invalid states and preservation, normal production generation increments, and retryable shutdown;
 - info capacity and metrics failure normalization, info write-range wrap, and exact/partial info overlap;
 - process pointer-range wrap, partial overlap rejection, stale generation/format errors, exact out-of-place, exact in-place, and zero-frame behavior;
 - literal generation, latency, checksum, and cumulative metrics results.
 
 Dedicated shared-library fixtures cover missing factory export, unsupported and incomplete factory negotiation, initialize failure, shutdown failure, and a blocked in-flight metrics call. Loader tests verify rejection/unload, instance ownership, in-flight ownership, successful-shutdown unload, and the documented shutdown-failure abandonment behavior. Real-process tests cover unsupported factory and initialize failure as setup failures.
+
+Generation exhaustion is exercised only through the separately named `aivs_fixture_mock_generation_exhaustion` shared library. That target is declared under the `BUILD_TESTING`-gated test tree and alone receives `AIVS_MOCK_ENABLE_INITIAL_GENERATION_TEST_SEAM`; the matrix loads it only for reset/prepare exhaustion cases. A production-only build does not create this artifact.
 
 ## RED / GREEN evidence
 
@@ -46,6 +49,7 @@ In addition to the original feature RED/GREEN sequence, review fixes produced th
 2. Dynamic engine-info tests accepted overlapping output ranges and a wrapped required write range until validation was added.
 3. Short result prefixes retained covered failure fields until prepare/reset/metrics normalization became per-field.
 4. An allocating pipeline exception terminated the test process while `run` was `noexcept`; removing the incorrect contract allowed stdio to translate it to exit `4`.
+5. The round-2 production configuration test failed because the production plugin accepted a valid `initial_generation` field; compile-gating that parser branch to the distinct test fixture made the production rejection and isolated exhaustion cases pass.
 
 The malicious fixture and lifetime tests then exercised the corrected loader through actual dynamically loaded modules.
 
@@ -56,6 +60,7 @@ The malicious fixture and lifetime tests then exercised the corrected loader thr
 - Export inspection: the production Mock plugin exposed exactly `_aivs_voice_engine_get_api` on macOS.
 - Real-process smoke: valid Unicode absolute plugin copy/path, Hello-first success, fixed 80-byte result/checksum, clean shutdown, bounded failure diagnostics, and zero stdout for setup failures.
 - Warning build: all C/C++ targets passed `-Wall -Wextra -Wpedantic -Werror`.
+- Production-only Release build with `BUILD_TESTING=OFF` produced `aivs_mock_voice_engine` and no generation-exhaustion fixture artifact.
 - Rust: `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, and `cargo test --workspace` passed (11 tests).
 - pnpm: `pnpm contracts:check` and `pnpm test` passed (13 tests total: 6 contract and 7 doctor).
 - ABI drift/frozen-file audit and `git diff --check` passed.
