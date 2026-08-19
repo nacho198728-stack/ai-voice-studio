@@ -50,7 +50,7 @@
 
 - [ ] 建立统一日志结构。Rust 使用 tracing，C++ 使用 spdlog，统一 timestamp、component、level、message 和可选 request_id/generation 字段；默认写入开发日志目录，DEBUG 仅由配置打开，Mock 的 process_audio 热路径只更新原子指标而不逐帧打印。受影响路径包括 `core/telemetry`、`apps/runtime-host`、C++ Runtime 日志模块和 `config/config.json`。
 
-- [ ] 建立最小配置与能力模型。创建版本化 `config/config.json`，包含 runtime、audio 占位设置、backend=mock 和 debug；定义 Hardware/Runtime/Engine capability 的最小结构，但 Phase 0.5 只返回平台、架构、Runtime version、Mock backend 和 Mock Engine 能力，不进行硬件 Benchmark。受影响路径包括 `core/capability`、`core/model-package`、`core/telemetry` 和配置加载模块。
+- [x] 建立最小配置与能力模型。创建版本化 `config/config.json`，包含 runtime、audio 占位设置、backend=mock 和 debug；定义 Hardware/Runtime/Engine capability 的最小结构，但 Phase 0.5 只返回平台、架构、Runtime version、Mock backend 和 Mock Engine 能力，不进行硬件 Benchmark。受影响路径包括 `core/capability`、`core/model-package`、`core/telemetry` 和配置加载模块。
 
 - [ ] 创建 Desktop Shell 并打通 Mock 控制链路。`apps/desktop` 只显示产品名、开发版本、Runtime 状态和控制操作；Tauri 经 RuntimeManager/IPC 触发 C++ 内部 Mock PCM，UI 只接收帧数、校验值、耗时和 metrics，不接触 PCM 或业务功能。
 
