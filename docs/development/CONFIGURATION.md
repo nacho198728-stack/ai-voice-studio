@@ -17,10 +17,12 @@ The same host supplies an explicit absolute writable application-data base for
 logging. `debug.development_log_directory` is validated as a bounded portable
 relative path and joined to that base; it is never resolved against cwd, home,
 an environment variable, or the executable location. Empty/dot/parent
-components, absolute or drive-qualified paths, backslashes, NUL, and oversized
-values fail validation. RuntimeHost passes the resolved absolute directory,
-effective level, and generation to `voice-runtime` as native process arguments,
-preserving Unicode through `OsStr` on Rust and `wmain` on Windows.
+components, absolute or drive-qualified paths, Windows reserved device stems,
+reserved/control characters, trailing dot/space, backslashes, NUL, and
+oversized values fail validation on every host platform. RuntimeHost passes the
+resolved absolute directory, effective level, explicit debug-authority bit,
+and generation to `voice-runtime` as native process arguments, preserving
+Unicode through `OsStr` on Rust and `wmain` on Windows.
 
 A future user settings store must use a separate platform-owned writable
 location, schema, migration policy, and atomic-write implementation. It must not
@@ -42,8 +44,10 @@ to surface an error; it must not silently continue with implicit defaults.
 `debug.enabled=false`, requested trace/debug is deterministically clamped to
 info; warn/error remain stricter. RuntimeManager validates this gate again, so
 the production launch path cannot enable verbose logging by mutating only the
-level. The telemetry initializer, not the configuration loader, creates the
-resolved development directory.
+level. RuntimeHost and Rust telemetry carry a validated policy rather than raw
+authority; the native CLI rejects trace/debug unless `--debug-enabled true` is
+also explicit. The telemetry initializer, not the configuration loader,
+creates the resolved development directory.
 
 ## Phase 0.5 capability truthfulness
 

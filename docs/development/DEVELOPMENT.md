@@ -114,7 +114,9 @@ cache. Release validation uses the corresponding `native-release` presets.
 Development logs are JSONL under the host-resolved directory configured by
 `config/config.json`. Rust writes `runtime-host.jsonl`; C++ writes
 `voice-runtime.jsonl` and mirrors records to stderr. Runtime stdout is binary
-IPC and must never be redirected into a text log. Phase 0.5 does not rotate or
+IPC and must never be redirected into a text log. Both logging authorities
+require an explicit debug bit before trace/debug can be enabled, and the native
+process rejects an inconsistent argument pair. Phase 0.5 does not rotate or
 delete logs; remove old development logs manually while both processes are
 stopped.
 

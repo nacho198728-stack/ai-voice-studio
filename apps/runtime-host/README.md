@@ -10,4 +10,6 @@ existing bounded tail.
 The application composition root must initialize telemetry once, retain its
 guard until shutdown, resolve the configuration's development log directory
 against a platform-owned writable base, then construct `RuntimeManagerConfig`
-from the same validated product configuration.
+from the same validated product configuration. RuntimeManager stores the
+validated logging policy rather than a raw level and explicitly passes both
+its effective level and debug-authority bit to each native child.

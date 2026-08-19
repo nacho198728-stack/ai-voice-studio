@@ -160,6 +160,17 @@ std::optional<LogLevel> parse_level(std::basic_string_view<Character> value) noe
 }
 
 template <typename Character>
+std::optional<bool> parse_boolean(std::basic_string_view<Character> value) noexcept {
+  if (equals_ascii(value, "true")) {
+    return true;
+  }
+  if (equals_ascii(value, "false")) {
+    return false;
+  }
+  return std::nullopt;
+}
+
+template <typename Character>
 RuntimeOptionsParseResult parse_options(
     std::span<const std::basic_string_view<Character>> arguments) {
   RuntimeOptions options;
@@ -167,7 +178,10 @@ RuntimeOptionsParseResult parse_options(
   bool work_seen = false;
   bool log_directory_seen = false;
   bool log_level_seen = false;
+  bool debug_enabled_seen = false;
   bool generation_seen = false;
+  LogLevel requested_log_level = LogLevel::Info;
+  bool debug_enabled = false;
   for (std::size_t index = 0U; index < arguments.size();) {
     const auto option = arguments[index++];
     if (contains_nul(option)) {
@@ -234,7 +248,23 @@ RuntimeOptionsParseResult parse_options(
       if (!parsed.has_value()) {
         return failure("--log-level must be trace, debug, info, warn, or error");
       }
-      options.log_level = *parsed;
+      requested_log_level = *parsed;
+      continue;
+    }
+    if (equals_ascii(option, "--debug-enabled")) {
+      if (debug_enabled_seen || index == arguments.size()) {
+        return failure("--debug-enabled must appear once with true or false");
+      }
+      debug_enabled_seen = true;
+      const auto value = arguments[index++];
+      if (contains_nul(value)) {
+        return failure("--debug-enabled contains embedded NUL");
+      }
+      const auto parsed = parse_boolean(value);
+      if (!parsed.has_value()) {
+        return failure("--debug-enabled must be true or false");
+      }
+      debug_enabled = *parsed;
       continue;
     }
     if (equals_ascii(option, "--generation")) {
@@ -258,10 +288,15 @@ RuntimeOptionsParseResult parse_options(
   if (work_seen && !plugin_seen) {
     return failure("--mock-work-iterations requires --plugin");
   }
-  if (!log_directory_seen || !log_level_seen || !generation_seen) {
+  if (!log_directory_seen || !log_level_seen || !debug_enabled_seen || !generation_seen) {
     return failure(
-        "--log-directory, --log-level, and --generation are required explicit inputs");
+        "--log-directory, --log-level, --debug-enabled, and --generation are required inputs");
   }
+  const auto policy = LoggingPolicy::create(debug_enabled, requested_log_level);
+  if (!policy.has_value()) {
+    return failure("trace and debug logging require --debug-enabled true");
+  }
+  options.logging_policy = *policy;
   return {std::move(options), {}};
 }
 

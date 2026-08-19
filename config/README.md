@@ -14,5 +14,7 @@ See `docs/development/CONFIGURATION.md` for validation and failure policy.
 `debug.development_log_directory` is a portable, slash-separated relative path
 resolved only against an explicit absolute host-owned application-data base.
 Absolute, drive-qualified, backslash, empty-component, dot, and parent traversal
-paths are rejected. `debug.log_level` is the requested level; trace/debug is
-clamped to info unless `debug.enabled` is true.
+paths are rejected. Windows device stems (including extensions), reserved path
+characters/control characters, and components ending in dot/space are also
+rejected on every platform. `debug.log_level` is the requested level;
+trace/debug is clamped to info unless `debug.enabled` is true.

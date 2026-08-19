@@ -2,7 +2,7 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ai_voice_runtime_host::{ManagerErrorKind, RuntimeManager, RuntimeManagerConfig};
-use ai_voice_telemetry::{Level, TelemetryConfig, initialize};
+use ai_voice_telemetry::{Level, LoggingPolicy, TelemetryConfig, initialize};
 use serde_json::Value;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -15,7 +15,11 @@ async fn lifecycle_failures_emit_bounded_structured_events_without_resource_path
         "aivs-runtime-manager-logging-{}-{nonce}",
         std::process::id()
     ));
-    let guard = initialize(TelemetryConfig::new(directory.clone(), Level::Debug)).unwrap();
+    let guard = initialize(TelemetryConfig::new(
+        directory.clone(),
+        LoggingPolicy::new(true, Level::Debug),
+    ))
+    .unwrap();
     let missing_runtime = directory.join("missing-runtime-密钥");
     let plugin = directory.join("mock-plugin-路径");
     let manager = RuntimeManager::new(RuntimeManagerConfig::new(

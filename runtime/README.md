@@ -6,8 +6,10 @@ the desktop control plane for failure isolation; stdout remains byte-for-byte
 protocol-only.
 
 RuntimeHost starts `voice-runtime` with explicit Unicode-safe arguments for the
-plugin, Mock work bound, log directory, effective log level, and host process
-generation. The Runtime never reads logging configuration from environment
+plugin, Mock work bound, log directory, effective log level, debug-authority
+bit, and host process generation. Trace/debug plus a false or missing
+`--debug-enabled` argument is rejected before logger initialization. The
+Runtime never reads logging configuration from environment
 variables or the current working directory. Its non-global spdlog instance
 writes unified JSONL synchronously to stderr and `voice-runtime.jsonl`; logger
 destruction flushes the file. Initialization failure exits with an actionable
@@ -15,6 +17,8 @@ stderr diagnostic before any stdout frame is written. Logger initialization
 rejects an invalid UTF-8 component, while invalid message byte sequences are
 replaced with U+FFFD before the result is truncated at a UTF-8 boundary.
 
-No logging dependency enters the Mock engine target. In particular,
-`mock_process_audio` contains no log call, allocation, or lock and continues to
-update only its existing relaxed atomic metrics on the hot path.
+No logging dependency enters the Mock engine target: configure-time target
+guards pin its direct dependency surface, while a reviewed source hash pins the
+complete `mock_process_audio` body. Existing multi-call behavior tests verify
+zero stderr records, deterministic output, and the exact relaxed atomic
+metrics. The hot path therefore contains no log call, allocation, or lock.

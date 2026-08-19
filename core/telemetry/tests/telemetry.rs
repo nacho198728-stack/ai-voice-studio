@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ai_voice_telemetry::{
-    EventFields, Level, TelemetryConfig, TelemetryErrorKind, emit, initialize,
+    EventFields, Level, LoggingPolicy, TelemetryConfig, TelemetryErrorKind, emit, initialize,
 };
 use serde_json::Value;
 
@@ -30,18 +30,28 @@ fn parse_lines(path: &PathBuf) -> Vec<Value> {
 fn global_initialization_routes_jsonl_flushes_and_rejects_reinitialization() {
     let blocked = unique_directory("blocked");
     fs::write(&blocked, b"not a directory").unwrap();
-    let failure = initialize(TelemetryConfig::new(blocked.clone(), Level::Info)).unwrap_err();
+    let failure = initialize(TelemetryConfig::new(
+        blocked.clone(),
+        LoggingPolicy::new(false, Level::Info),
+    ))
+    .unwrap_err();
     assert_eq!(failure.kind(), TelemetryErrorKind::Directory);
     assert!(failure.to_string().contains("directory"));
 
     let blocked_file = unique_directory("blocked-file");
     fs::create_dir_all(blocked_file.join("runtime-host.jsonl")).unwrap();
-    let file_failure =
-        initialize(TelemetryConfig::new(blocked_file.clone(), Level::Info)).unwrap_err();
+    let file_failure = initialize(TelemetryConfig::new(
+        blocked_file.clone(),
+        LoggingPolicy::new(false, Level::Info),
+    ))
+    .unwrap_err();
     assert_eq!(file_failure.kind(), TelemetryErrorKind::File);
 
     let directory = unique_directory("日志-🎵");
-    let guard = initialize(TelemetryConfig::new(directory.clone(), Level::Debug)).unwrap();
+    let policy = LoggingPolicy::new(false, Level::Debug);
+    assert_eq!(policy.effective_level(), Level::Info);
+    assert!(!policy.debug_enabled());
+    let guard = initialize(TelemetryConfig::new(directory.clone(), policy)).unwrap();
     emit(
         Level::Info,
         "runtime-host",
@@ -57,6 +67,14 @@ fn global_initialization_routes_jsonl_flushes_and_rejects_reinitialization() {
         "hidden",
         EventFields::default(),
     );
+    tracing::warn!(
+        component = %"直".repeat(80),
+        message = %"外".repeat(300),
+        request_id = 99_u64,
+        secret = "must-not-be-flattened",
+    );
+    tracing::error!(component = "", arbitrary = true);
+    tracing::debug!(message = "direct debug bypass attempt");
     emit(
         Level::Warn,
         &"组".repeat(80),
@@ -64,12 +82,16 @@ fn global_initialization_routes_jsonl_flushes_and_rejects_reinitialization() {
         EventFields::default(),
     );
 
-    let repeated = initialize(TelemetryConfig::new(directory.clone(), Level::Info)).unwrap_err();
+    let repeated = initialize(TelemetryConfig::new(
+        directory.clone(),
+        LoggingPolicy::new(false, Level::Info),
+    ))
+    .unwrap_err();
     assert_eq!(repeated.kind(), TelemetryErrorKind::AlreadyInitialized);
     drop(guard);
 
     let records = parse_lines(&directory.join("runtime-host.jsonl"));
-    assert_eq!(records.len(), 2);
+    assert_eq!(records.len(), 4);
     let record = records[0].as_object().unwrap();
     assert_eq!(record.len(), 6);
     assert!(record["timestamp"].as_str().unwrap().ends_with('Z'));
@@ -79,11 +101,41 @@ fn global_initialization_routes_jsonl_flushes_and_rejects_reinitialization() {
     assert_eq!(record["message"], "quoted \"line\"\n音乐");
     assert_eq!(record["request_id"], 42);
     assert_eq!(record["generation"], 7);
-    let bounded = records[1].as_object().unwrap();
+    let bounded = records
+        .iter()
+        .find(|value| value.get("request_id").is_none() && value["level"] == "warn")
+        .unwrap()
+        .as_object()
+        .unwrap();
     assert_eq!(bounded.len(), 4);
     assert!(bounded["component"].as_str().unwrap().len() <= 64);
     assert!(bounded["message"].as_str().unwrap().len() <= 512);
     assert_eq!(bounded["level"], "warn");
+    let direct = records
+        .iter()
+        .find(|value| value["request_id"] == 99)
+        .unwrap()
+        .as_object()
+        .unwrap();
+    assert_eq!(direct.len(), 5);
+    assert_eq!(direct["level"], "warn");
+    assert_eq!(direct["request_id"], 99);
+    assert!(direct["component"].as_str().unwrap().len() <= 64);
+    assert!(direct["message"].as_str().unwrap().len() <= 512);
+    assert!(!direct.contains_key("secret"));
+    let normalized = records
+        .iter()
+        .find(|value| value["level"] == "error")
+        .unwrap()
+        .as_object()
+        .unwrap();
+    assert_eq!(normalized.len(), 4);
+    assert!(!normalized["component"].as_str().unwrap().is_empty());
+    assert_eq!(normalized["message"], "event");
+    assert!(!normalized.contains_key("arbitrary"));
+    assert!(!records.iter().any(|value| {
+        value["message"] == "direct debug bypass attempt" || value["message"] == "hidden"
+    }));
 
     fs::remove_dir_all(directory).unwrap();
     fs::remove_file(blocked).unwrap();

@@ -11,14 +11,20 @@ endif()
 math(EXPR length "${end} - ${begin}")
 string(SUBSTRING "${source}" ${begin} ${length} process_audio)
 
-foreach(forbidden IN ITEMS "spdlog" "log(" "fprintf" "printf" "std::cerr" "std::cout")
-  string(FIND "${process_audio}" "${forbidden}" found)
-  if(NOT found EQUAL -1)
-    message(FATAL_ERROR "Mock process_audio contains forbidden logging token: ${forbidden}")
-  endif()
-endforeach()
+string(SHA256 process_audio_sha256 "${process_audio}")
+set(expected_sha256 "99d1886e51e45aca443dd4a8fde47c56c6d8df3b312e63c39d305eaac770c844")
+if(NOT process_audio_sha256 STREQUAL expected_sha256)
+  message(FATAL_ERROR
+    "Mock process_audio changed from the reviewed logging-free hot path; "
+    "expected ${expected_sha256}, got ${process_audio_sha256}"
+  )
+endif()
 
-foreach(required IN ITEMS "process_call_count.fetch_add" "input_frame_count.fetch_add" "output_frame_count.fetch_add")
+foreach(required IN ITEMS
+    "process_call_count.fetch_add(1U, std::memory_order_relaxed)"
+    "input_frame_count.fetch_add(request->input.frame_count, std::memory_order_relaxed)"
+    "output_frame_count.fetch_add(request->input.frame_count, std::memory_order_relaxed)"
+)
   string(FIND "${process_audio}" "${required}" found)
   if(found EQUAL -1)
     message(FATAL_ERROR "Mock process_audio lost atomic-only metric update: ${required}")

@@ -6,6 +6,7 @@
 #include <bit>
 #include <cassert>
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -13,12 +14,69 @@
 #include <voice_engine.h>
 
 #if defined(_WIN32)
+#include <io.h>
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <unistd.h>
 #endif
 
 namespace {
+
+class StderrCapture final {
+ public:
+  StderrCapture() {
+    file_ = std::tmpfile();
+    assert(file_ != nullptr);
+    assert(std::fflush(stderr) == 0);
+#if defined(_WIN32)
+    saved_ = ::_dup(::_fileno(stderr));
+    assert(saved_ >= 0);
+    assert(::_dup2(::_fileno(file_), ::_fileno(stderr)) == 0);
+#else
+    saved_ = ::dup(::fileno(stderr));
+    assert(saved_ >= 0);
+    assert(::dup2(::fileno(file_), ::fileno(stderr)) >= 0);
+#endif
+  }
+
+  ~StderrCapture() {
+    restore();
+  }
+
+  StderrCapture(const StderrCapture&) = delete;
+  StderrCapture& operator=(const StderrCapture&) = delete;
+
+  std::uint64_t finish() {
+    assert(std::fflush(stderr) == 0);
+    assert(std::fseek(file_, 0L, SEEK_END) == 0);
+    const auto size = std::ftell(file_);
+    assert(size >= 0L);
+    restore();
+    return static_cast<std::uint64_t>(size);
+  }
+
+ private:
+  void restore() {
+    if (saved_ < 0) {
+      return;
+    }
+    assert(std::fflush(stderr) == 0);
+#if defined(_WIN32)
+    assert(::_dup2(saved_, ::_fileno(stderr)) == 0);
+    assert(::_close(saved_) == 0);
+#else
+    assert(::dup2(saved_, ::fileno(stderr)) >= 0);
+    assert(::close(saved_) == 0);
+#endif
+    saved_ = -1;
+    assert(std::fclose(file_) == 0);
+    file_ = nullptr;
+  }
+
+  std::FILE* file_{nullptr};
+  int saved_{-1};
+};
 
 class DynamicLibrary {
  public:
@@ -203,6 +261,7 @@ void complete_lifecycle_uses_all_eight_operations_through_the_dynamic_table(cons
   short_process_result.output.sample_rate_hz = 123U;
   short_process_result.processed_frame_count = 99U;
   short_process_result.stream_generation = 99U;
+  StderrCapture hot_path_logs;
   assert(api.process_audio(engine, &process_request, &short_process_result) ==
          AIVS_ERROR_BUFFER_TOO_SMALL);
   assert(short_process_result.output.frames_written_or_required == 4U);
@@ -259,6 +318,7 @@ void complete_lifecycle_uses_all_eight_operations_through_the_dynamic_table(cons
   assert(api.process_audio(engine, &zero_request, &zero_result) == AIVS_ERROR_SUCCESS);
   assert(zero_result.processed_frame_count == 0U);
   assert(zero_result.output.frames_written_or_required == 0U);
+  assert(hot_path_logs.finish() == 0U);
 
   aivs_get_metrics_request_t metrics_request{
       sizeof(aivs_get_metrics_request_t), AIVS_VOICE_ENGINE_ABI_V1_VERSION, {0U, 0U}};

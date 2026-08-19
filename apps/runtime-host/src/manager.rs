@@ -11,14 +11,16 @@ use ai_voice_capability::{
     NativeRuntimeCapabilities, Platform, RuntimeBackend,
 };
 use ai_voice_config::{
-    BackendKind, LogLevel, MAX_MOCK_WORK_ITERATIONS, MAX_RUNTIME_IN_FLIGHT,
+    BackendKind, LogLevel as ConfigLogLevel, MAX_MOCK_WORK_ITERATIONS, MAX_RUNTIME_IN_FLIGHT,
     MAX_RUNTIME_QUEUE_CAPACITY, MAX_RUNTIME_TIMEOUT_MS, MAX_STDERR_TAIL_BYTES, ProductConfig,
 };
 use ai_voice_contracts::runtime_message::{
     Command, Decoder, MAX_PING_PAYLOAD_BYTES, MessageKind, RuntimeMessage, encode,
 };
 use ai_voice_contracts::{ErrorCode, IPC_PROTOCOL_CURRENT_VERSION, RUNTIME_VERSION};
-use ai_voice_telemetry::{EventFields, Level as TelemetryLevel, emit as emit_telemetry};
+use ai_voice_telemetry::{
+    EventFields, Level as TelemetryLevel, LoggingPolicy, emit as emit_telemetry,
+};
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin};
@@ -39,6 +41,16 @@ const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 const MAX_PIPE_DRAIN_EVENTS: usize = 64;
 const REAP_TIMEOUT: Duration = Duration::from_secs(2);
 const TELEMETRY_COMPONENT: &str = "runtime-host";
+
+const fn telemetry_level(level: ConfigLogLevel) -> TelemetryLevel {
+    match level {
+        ConfigLogLevel::Trace => TelemetryLevel::Trace,
+        ConfigLogLevel::Debug => TelemetryLevel::Debug,
+        ConfigLogLevel::Info => TelemetryLevel::Info,
+        ConfigLogLevel::Warn => TelemetryLevel::Warn,
+        ConfigLogLevel::Error => TelemetryLevel::Error,
+    }
+}
 
 fn telemetry(
     level: TelemetryLevel,
@@ -545,8 +557,7 @@ pub struct RuntimeManagerConfig {
     pub stderr_tail_bytes: usize,
     pub restart_max_attempts: u32,
     pub log_directory: PathBuf,
-    pub log_level: LogLevel,
-    debug_enabled: bool,
+    pub logging_policy: LoggingPolicy,
 }
 
 impl RuntimeManagerConfig {
@@ -568,8 +579,7 @@ impl RuntimeManagerConfig {
             stderr_tail_bytes: 8_192,
             restart_max_attempts: 0,
             log_directory,
-            log_level: LogLevel::Info,
-            debug_enabled: false,
+            logging_policy: LoggingPolicy::new(false, TelemetryLevel::Info),
         }
     }
 
@@ -608,8 +618,10 @@ impl RuntimeManagerConfig {
                         "development log directory is invalid: {error}"
                     ))
                 })?,
-            log_level: product.debug().effective_log_level(),
-            debug_enabled: product.debug().enabled(),
+            logging_policy: LoggingPolicy::new(
+                product.debug().enabled(),
+                telemetry_level(product.debug().log_level()),
+            ),
         };
         config.validate()?;
         Ok(config)
@@ -634,11 +646,6 @@ impl RuntimeManagerConfig {
         validate_path(&self.runtime_path, "Runtime")?;
         validate_path(&self.plugin_path, "plugin")?;
         validate_path(&self.log_directory, "log directory")?;
-        if !self.debug_enabled && matches!(self.log_level, LogLevel::Trace | LogLevel::Debug) {
-            return Err(ManagerError::invalid_configuration(
-                "trace and debug logging require debug.enabled=true",
-            ));
-        }
         if self.mock_work_iterations > MAX_MOCK_WORK_ITERATIONS {
             return Err(ManagerError::invalid_configuration(
                 "mock work iterations exceed the fixed limit",
@@ -2158,7 +2165,13 @@ fn spawn_process(
         .arg("--log-directory")
         .arg(&config.log_directory)
         .arg("--log-level")
-        .arg(config.log_level.as_str())
+        .arg(config.logging_policy.as_str())
+        .arg("--debug-enabled")
+        .arg(if config.logging_policy.debug_enabled() {
+            "true"
+        } else {
+            "false"
+        })
         .arg("--generation")
         .arg(generation.to_string())
         .stdin(Stdio::piped())
@@ -2830,12 +2843,8 @@ mod tests {
         no_pending.max_in_flight = 0;
         assert!(no_pending.validate().is_err());
 
-        let mut gated_debug = RuntimeManagerConfig::new(
-            PathBuf::from("/tmp/voice-runtime"),
-            PathBuf::from("/tmp/mock-engine"),
-        );
-        gated_debug.log_level = LogLevel::Debug;
-        assert!(gated_debug.validate().is_err());
+        let gated_debug = LoggingPolicy::new(false, TelemetryLevel::Debug);
+        assert_eq!(gated_debug.effective_level(), TelemetryLevel::Info);
     }
 
     #[cfg(unix)]

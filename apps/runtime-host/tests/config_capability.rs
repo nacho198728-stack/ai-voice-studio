@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ai_voice_config::{LogLevel, ProductConfig};
+use ai_voice_config::ProductConfig;
 use ai_voice_runtime_host::RuntimeManagerConfig;
+use ai_voice_telemetry::Level;
 
 fn default_config() -> ProductConfig {
     ProductConfig::load_from_bytes(include_bytes!("../../../config/config.json")).unwrap()
@@ -39,7 +40,8 @@ fn validated_product_config_maps_every_launch_setting_but_not_resource_authority
     assert_eq!(launch.stderr_tail_bytes, 8_192);
     assert_eq!(launch.restart_max_attempts, 0);
     assert_eq!(launch.log_directory, log_base.join("logs/development"));
-    assert_eq!(launch.log_level, LogLevel::Info);
+    assert_eq!(launch.logging_policy.effective_level(), Level::Info);
+    assert!(!launch.logging_policy.debug_enabled());
 
     let other_runtime = absolute_resource("other-runtime");
     let other_plugin = absolute_resource("other-plugin");
@@ -52,6 +54,20 @@ fn validated_product_config_maps_every_launch_setting_but_not_resource_authority
     .unwrap();
     assert_eq!(other.runtime_path, other_runtime);
     assert_eq!(other.plugin_path, other_plugin);
+
+    let disabled_verbose_bytes = include_str!("../../../config/config.json")
+        .replace("\"log_level\": \"info\"", "\"log_level\": \"debug\"");
+    let disabled_verbose =
+        ProductConfig::load_from_bytes(disabled_verbose_bytes.as_bytes()).unwrap();
+    let launch = RuntimeManagerConfig::from_product_config(
+        &disabled_verbose,
+        absolute_resource("clamped-runtime"),
+        absolute_resource("clamped-plugin"),
+        log_base.clone(),
+    )
+    .unwrap();
+    assert_eq!(launch.logging_policy.effective_level(), Level::Info);
+    assert!(!launch.logging_policy.debug_enabled());
 
     let verbose_bytes = include_str!("../../../config/config.json")
         .replace(
@@ -67,5 +83,6 @@ fn validated_product_config_maps_every_launch_setting_but_not_resource_authority
         log_base,
     )
     .unwrap();
-    assert_eq!(launch.log_level, LogLevel::Trace);
+    assert_eq!(launch.logging_policy.effective_level(), Level::Trace);
+    assert!(launch.logging_policy.debug_enabled());
 }

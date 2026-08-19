@@ -219,6 +219,25 @@ std::string_view log_level_name(LogLevel level) noexcept {
   return "error";
 }
 
+std::optional<LoggingPolicy> LoggingPolicy::create(
+    bool debug_enabled,
+    LogLevel level) noexcept {
+  switch (level) {
+    case LogLevel::Trace:
+    case LogLevel::Debug:
+    case LogLevel::Info:
+    case LogLevel::Warn:
+    case LogLevel::Error:
+      break;
+    default:
+      return std::nullopt;
+  }
+  if (!debug_enabled && (level == LogLevel::Trace || level == LogLevel::Debug)) {
+    return std::nullopt;
+  }
+  return LoggingPolicy(debug_enabled, level);
+}
+
 class RuntimeLogger::Impl {
  public:
   Impl(
@@ -272,7 +291,7 @@ RuntimeLoggerInitialization RuntimeLogger::initialize(RuntimeLoggingConfig confi
     std::vector<spdlog::sink_ptr> sinks{file_sink, stderr_sink};
     auto logger = std::make_shared<spdlog::logger>("voice-runtime", sinks.begin(), sinks.end());
     logger->set_pattern("%v");
-    logger->set_level(spdlog_level(config.level));
+    logger->set_level(spdlog_level(config.policy.level()));
     return {
         std::unique_ptr<RuntimeLogger>(new RuntimeLogger(std::make_unique<Impl>(
             std::move(logger), std::move(config.component), config.generation))),

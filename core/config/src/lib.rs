@@ -264,10 +264,10 @@ fn validate_development_log_directory(value: &str) -> Result<(), ConfigError> {
     let invalid = value.is_empty()
         || value.len() > MAX_DEVELOPMENT_LOG_DIRECTORY_BYTES
         || value.starts_with('/')
-        || value.contains(['\\', ':', '\0'])
+        || value.contains(['\\', ':', '\0', '<', '>', '"', '|', '?', '*'])
         || value
             .split('/')
-            .any(|component| component.is_empty() || component == "." || component == "..");
+            .any(|component| !is_portable_path_component(component));
     if invalid {
         return Err(ConfigError::new(
             ConfigErrorKind::Semantic,
@@ -275,6 +275,30 @@ fn validate_development_log_directory(value: &str) -> Result<(), ConfigError> {
         ));
     }
     Ok(())
+}
+
+fn is_portable_path_component(component: &str) -> bool {
+    if component.is_empty()
+        || component == "."
+        || component == ".."
+        || component.ends_with(['.', ' '])
+        || component.chars().any(char::is_control)
+    {
+        return false;
+    }
+
+    let stem = component
+        .split_once('.')
+        .map_or(component, |(stem, _)| stem)
+        .trim_end_matches(['.', ' ']);
+    let stem = stem.to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$") {
+        return false;
+    }
+    let bytes = stem.as_bytes();
+    !((bytes.starts_with(b"COM") || bytes.starts_with(b"LPT"))
+        && bytes.len() == 4
+        && matches!(bytes[3], b'1'..=b'9'))
 }
 
 fn validate_inclusive(

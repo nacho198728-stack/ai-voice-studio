@@ -154,10 +154,32 @@ fn debug_gate_and_portable_development_log_path_are_enforced() {
         r"logs\windows",
         "logs//empty",
         "logs/./dot",
+        "CON",
+        "con.txt",
+        "logs/PRN",
+        "logs/aux.json",
+        "logs/NUL",
+        "logs/CLOCK$",
+        "logs/com1.data",
+        "logs/COM9",
+        "logs/lpt1",
+        "logs/LPT9.txt",
+        "logs/trailing.",
+        "logs/trailing ",
+        "logs/control\u{1f}",
+        "logs/less<than",
+        "logs/greater>than",
+        "logs/quote\"name",
+        "logs/pipe|name",
+        "logs/question?name",
+        "logs/star*name",
     ] {
         let text = VALID.replace(
             "\"development_log_directory\": \"logs/development\"",
-            &format!("\"development_log_directory\": {invalid:?}"),
+            &format!(
+                "\"development_log_directory\": {}",
+                serde_json::to_string(invalid).unwrap()
+            ),
         );
         let error = parse(&text).expect_err(invalid);
         assert_eq!(error.kind(), ConfigErrorKind::Semantic, "{invalid}");

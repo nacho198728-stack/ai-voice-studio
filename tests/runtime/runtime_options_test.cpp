@@ -23,15 +23,17 @@ void logging_and_generation_are_required_explicit_process_inputs() {
 void explicit_absolute_plugin_and_bounded_work_are_accepted_in_either_order() {
   const auto plugin = std::filesystem::absolute("mock-plugin").string();
   const auto logs = std::filesystem::absolute("logs-声音").string();
-  const std::array<std::string_view, 10> arguments{
+  const std::array<std::string_view, 12> arguments{
       "--mock-work-iterations", "1000000", "--plugin", plugin,
-      "--log-directory", logs, "--log-level", "debug", "--generation", "9"};
+      "--log-directory", logs, "--log-level", "debug", "--debug-enabled", "true",
+      "--generation", "9"};
   const auto result = runtime::parse_runtime_options(arguments);
   assert(result.options.has_value());
   assert(result.options->plugin_path == std::filesystem::path(plugin));
   assert(result.options->mock_work_iterations == 1'000'000U);
   assert(result.options->log_directory == std::filesystem::path(logs));
-  assert(result.options->log_level == runtime::LogLevel::Debug);
+  assert(result.options->logging_policy.level() == runtime::LogLevel::Debug);
+  assert(result.options->logging_policy.debug_enabled());
   assert(result.options->generation == 9U);
   assert(result.diagnostic.empty());
 }
@@ -57,6 +59,17 @@ void malformed_unknown_duplicate_or_implicit_inputs_are_rejected() {
   assert(!runtime::parse_runtime_options(missing_value).options.has_value());
   const std::array<std::string_view, 2> work_without_plugin{"--mock-work-iterations", "1"};
   assert(!runtime::parse_runtime_options(work_without_plugin).options.has_value());
+
+  const auto logs = std::filesystem::absolute("logs").string();
+  const std::array<std::string_view, 6> missing_debug_authority{
+      "--log-directory", logs, "--log-level", "info", "--generation", "1"};
+  assert(!runtime::parse_runtime_options(missing_debug_authority).options.has_value());
+  const std::array<std::string_view, 8> bypass{
+      "--log-directory", logs, "--log-level", "debug", "--debug-enabled", "false",
+      "--generation", "1"};
+  const auto bypass_result = runtime::parse_runtime_options(bypass);
+  assert(!bypass_result.options.has_value());
+  assert(bypass_result.diagnostic.find("debug") != std::string::npos);
 }
 
 void wide_arguments_preserve_unicode_paths_and_reject_embedded_nul() {
@@ -68,9 +81,10 @@ void wide_arguments_preserve_unicode_paths_and_reject_embedded_nul() {
   constexpr std::u8string_view expected_path = u8"/tmp/AI-Voice-声音/mock-engine";
 #endif
   const auto log_path = std::filesystem::absolute("日志-开发").wstring();
-  const std::array<std::wstring_view, 10> arguments{
+  const std::array<std::wstring_view, 12> arguments{
       L"--plugin", unicode_path, L"--mock-work-iterations", L"42",
-      L"--log-directory", log_path, L"--log-level", L"info", L"--generation", L"3"};
+      L"--log-directory", log_path, L"--log-level", L"info", L"--debug-enabled", L"false",
+      L"--generation", L"3"};
   const auto result = runtime::parse_runtime_options(arguments);
   assert(result.options.has_value());
   assert(result.options->plugin_path.has_value());

@@ -32,6 +32,12 @@ std::string read_file(const std::filesystem::path& path) {
   return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
+runtime::LoggingPolicy logging_policy(bool debug_enabled, runtime::LogLevel level) {
+  const auto policy = runtime::LoggingPolicy::create(debug_enabled, level);
+  assert(policy.has_value());
+  return *policy;
+}
+
 std::size_t valid_utf8_sequence_length(std::string_view value, std::size_t offset) {
   const auto available = value.size() - offset;
   const auto first = static_cast<unsigned char>(value[offset]);
@@ -207,7 +213,7 @@ void schema_escaping_level_gating_flush_and_repeated_instances_are_isolated() {
   {
     auto initialized = runtime::RuntimeLogger::initialize({
         directory,
-        runtime::LogLevel::Debug,
+        logging_policy(true, runtime::LogLevel::Debug),
         "voice-runtime",
     });
     assert(initialized.logger != nullptr);
@@ -236,7 +242,7 @@ void schema_escaping_level_gating_flush_and_repeated_instances_are_isolated() {
   {
     auto second = runtime::RuntimeLogger::initialize({
         directory,
-        runtime::LogLevel::Error,
+        logging_policy(false, runtime::LogLevel::Error),
         "voice-runtime",
     });
     assert(second.logger != nullptr);
@@ -259,7 +265,7 @@ void initialization_failure_is_actionable_and_does_not_leave_registered_state() 
   }
   auto failure = runtime::RuntimeLogger::initialize({
       blocked,
-      runtime::LogLevel::Info,
+      logging_policy(false, runtime::LogLevel::Info),
       "voice-runtime",
   });
   assert(failure.logger == nullptr);
@@ -267,20 +273,30 @@ void initialization_failure_is_actionable_and_does_not_leave_registered_state() 
   assert(failure.diagnostic.size() <= runtime::kMaximumLogDiagnosticBytes);
   std::filesystem::remove(blocked);
 
-  const auto invalid_component_directory = unique_directory("invalid-component");
-  auto invalid_component = runtime::RuntimeLogger::initialize({
-      invalid_component_directory,
-      runtime::LogLevel::Info,
+  const std::vector<std::string> invalid_components{
       std::string("voice-\xFF-runtime", 15U),
-  });
-  assert(invalid_component.logger == nullptr);
-  assert(!invalid_component.diagnostic.empty());
-  assert(!std::filesystem::exists(invalid_component_directory));
+      std::string("\xC0\xAF", 2U),
+      std::string("\xED\xA0\x80", 3U),
+      std::string("\xF4\x90\x80\x80", 4U),
+      std::string("\xF0\x9F", 2U),
+  };
+  for (std::size_t index = 0U; index < invalid_components.size(); ++index) {
+    const auto invalid_component_directory =
+        unique_directory("invalid-component-" + std::to_string(index));
+    auto invalid_component = runtime::RuntimeLogger::initialize({
+        invalid_component_directory,
+        logging_policy(false, runtime::LogLevel::Info),
+        invalid_components[index],
+    });
+    assert(invalid_component.logger == nullptr);
+    assert(!invalid_component.diagnostic.empty());
+    assert(!std::filesystem::exists(invalid_component_directory));
+  }
 
   const auto recovered = unique_directory("recovered");
   auto success = runtime::RuntimeLogger::initialize({
       recovered,
-      runtime::LogLevel::Info,
+      logging_policy(false, runtime::LogLevel::Info),
       "voice-runtime",
   });
   assert(success.logger != nullptr);
@@ -293,33 +309,56 @@ void invalid_message_utf8_is_replaced_before_bounded_jsonl_output() {
   {
     auto initialized = runtime::RuntimeLogger::initialize({
         directory,
-        runtime::LogLevel::Info,
+        logging_policy(false, runtime::LogLevel::Info),
         "voice-runtime",
     });
     assert(initialized.logger != nullptr);
     std::string malformed = "valid-";
     malformed.push_back(static_cast<char>(0xFFU));
+    malformed.append("-overlong-");
+    malformed.append("\xC0\xAF", 2U);
+    malformed.append("-surrogate-");
+    malformed.append("\xED\xA0\x80", 3U);
+    malformed.append("-out-of-range-");
+    malformed.append("\xF4\x90\x80\x80", 4U);
+    malformed.append("-continuation-");
+    malformed.push_back(static_cast<char>(0x80U));
     malformed.append("-truncated-");
     malformed.push_back(static_cast<char>(0xF0U));
     malformed.push_back(static_cast<char>(0x9FU));
     initialized.logger->log(runtime::LogLevel::Info, malformed);
 
-    std::string boundary(runtime::kMaximumLogMessageBytes - 1U, 'a');
-    boundary.append("🎵");
-    initialized.logger->log(runtime::LogLevel::Info, boundary);
+    std::string exact_boundary(runtime::kMaximumLogMessageBytes - 4U, 'a');
+    exact_boundary.append("🎵");
+    initialized.logger->log(runtime::LogLevel::Info, exact_boundary);
+    std::string truncated_boundary(runtime::kMaximumLogMessageBytes - 3U, 'b');
+    truncated_boundary.append("🎵");
+    initialized.logger->log(runtime::LogLevel::Info, truncated_boundary);
+
+    const std::string controls{"control\0\x1F", 9U};
+    initialized.logger->log(runtime::LogLevel::Info, controls);
   }
 
   const auto output = read_file(directory / runtime::kRuntimeLogFileName);
-  assert_jsonl_schema(output, 2U);
-  assert(output.find("valid-\xEF\xBF\xBD-truncated-") != std::string::npos);
-  assert(output.find("🎵") == std::string::npos);
-  assert(std::count(output.begin(), output.end(), '\n') == 2);
+  assert_jsonl_schema(output, 4U);
+  assert(output.find("valid-\xEF\xBF\xBD-overlong-") != std::string::npos);
+  const std::string exact_message =
+      "\"message\":\"" + std::string(runtime::kMaximumLogMessageBytes - 4U, 'a') + "🎵\"";
+  assert(output.find(exact_message) != std::string::npos);
+  const std::string truncated_message =
+      "\"message\":\"" + std::string(runtime::kMaximumLogMessageBytes - 3U, 'b') + "\"";
+  assert(output.find(truncated_message) != std::string::npos);
+  assert(output.find(R"("message":"control\u0000\u001f")") != std::string::npos);
+  assert(std::count(output.begin(), output.end(), '\n') == 4);
   std::filesystem::remove_all(directory);
 }
 
 }  // namespace
 
 int main() {
+  assert(!runtime::LoggingPolicy::create(false, runtime::LogLevel::Trace).has_value());
+  assert(!runtime::LoggingPolicy::create(false, runtime::LogLevel::Debug).has_value());
+  assert(!runtime::LoggingPolicy::create(true, static_cast<runtime::LogLevel>(99)).has_value());
   schema_escaping_level_gating_flush_and_repeated_instances_are_isolated();
   initialization_failure_is_actionable_and_does_not_leave_registered_state();
   invalid_message_utf8_is_replaced_before_bounded_jsonl_output();

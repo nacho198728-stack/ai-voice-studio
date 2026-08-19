@@ -311,7 +311,7 @@ ProcessExitCode run_native_with_options(RuntimeOptionsParseResult parsed) noexce
     }
     auto initialized = RuntimeLogger::initialize({
         parsed.options->log_directory,
-        parsed.options->log_level,
+        parsed.options->logging_policy,
         "voice-runtime",
         parsed.options->generation,
     });

@@ -18,7 +18,7 @@ struct RuntimeOptions {
   std::optional<std::filesystem::path> plugin_path;
   std::uint32_t mock_work_iterations{0U};
   std::filesystem::path log_directory;
-  LogLevel log_level{LogLevel::Info};
+  LoggingPolicy logging_policy{LoggingPolicy::production()};
   std::uint64_t generation{0U};
 };
 

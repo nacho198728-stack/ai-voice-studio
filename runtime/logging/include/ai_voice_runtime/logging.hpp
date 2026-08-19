@@ -26,6 +26,30 @@ enum class LogLevel {
 [[nodiscard]] std::optional<LogLevel> parse_log_level(std::string_view value) noexcept;
 [[nodiscard]] std::string_view log_level_name(LogLevel level) noexcept;
 
+class LoggingPolicy final {
+ public:
+  [[nodiscard]] static std::optional<LoggingPolicy> create(
+      bool debug_enabled,
+      LogLevel level) noexcept;
+  [[nodiscard]] static constexpr LoggingPolicy production() noexcept {
+    return LoggingPolicy(false, LogLevel::Info);
+  }
+
+  [[nodiscard]] constexpr bool debug_enabled() const noexcept {
+    return debug_enabled_;
+  }
+  [[nodiscard]] constexpr LogLevel level() const noexcept {
+    return level_;
+  }
+
+ private:
+  constexpr LoggingPolicy(bool debug_enabled, LogLevel level) noexcept
+      : debug_enabled_(debug_enabled), level_(level) {}
+
+  bool debug_enabled_;
+  LogLevel level_;
+};
+
 struct LogFields {
   std::optional<std::uint64_t> request_id;
   std::optional<std::uint64_t> generation;
@@ -43,7 +67,7 @@ class LogSink {
 
 struct RuntimeLoggingConfig {
   std::filesystem::path directory;
-  LogLevel level;
+  LoggingPolicy policy;
   std::string component;
   std::optional<std::uint64_t> generation{std::nullopt};
 };

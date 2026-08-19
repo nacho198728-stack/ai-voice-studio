@@ -20,6 +20,8 @@ set(missing_output "${SMOKE_DIRECTORY}/missing-output.bin")
 set(missing_stderr "${SMOKE_DIRECTORY}/missing-stderr.txt")
 set(log_failure_output "${SMOKE_DIRECTORY}/log-failure-output.bin")
 set(log_failure_stderr "${SMOKE_DIRECTORY}/log-failure-stderr.txt")
+set(debug_bypass_output "${SMOKE_DIRECTORY}/debug-bypass-output.bin")
+set(debug_bypass_stderr "${SMOKE_DIRECTORY}/debug-bypass-stderr.txt")
 file(WRITE "${empty_input}" "")
 set(log_directory "${SMOKE_DIRECTORY}/logs-日志")
 file(MAKE_DIRECTORY "${log_directory}")
@@ -46,7 +48,7 @@ file(COPY_FILE "${MOCK_PLUGIN}" "${unicode_plugin}" ONLY_IF_DIFFERENT)
 
 execute_process(
   COMMAND "${VOICE_RUNTIME}"
-    --log-directory "${log_directory}" --log-level debug --generation 1
+    --log-directory "${log_directory}" --log-level debug --debug-enabled true --generation 1
   INPUT_FILE "${empty_input}"
   OUTPUT_FILE "${eof_output}"
   ERROR_FILE "${eof_stderr}"
@@ -74,7 +76,7 @@ if(NOT write_shutdown_result EQUAL 0)
 endif()
 execute_process(
   COMMAND "${VOICE_RUNTIME}"
-    --log-directory "${log_directory}" --log-level debug --generation 1
+    --log-directory "${log_directory}" --log-level debug --debug-enabled true --generation 1
   INPUT_FILE "${shutdown_input}"
   OUTPUT_FILE "${shutdown_output}"
   ERROR_FILE "${shutdown_stderr}"
@@ -102,7 +104,7 @@ if(NOT write_pipeline_result EQUAL 0)
 endif()
 execute_process(
   COMMAND "${VOICE_RUNTIME}" --plugin "${unicode_plugin}" --mock-work-iterations 0
-    --log-directory "${log_directory}" --log-level debug --generation 1
+    --log-directory "${log_directory}" --log-level debug --debug-enabled true --generation 1
   INPUT_FILE "${pipeline_input}"
   OUTPUT_FILE "${pipeline_output}"
   ERROR_FILE "${pipeline_stderr}"
@@ -138,11 +140,32 @@ if(NOT invalid_output_size EQUAL 0 OR invalid_stderr_size EQUAL 0)
   message(FATAL_ERROR "voice-runtime malformed CLI contaminated stdout or omitted stderr")
 endif()
 
+set(debug_bypass_directory "${SMOKE_DIRECTORY}/debug-bypass-logs")
+execute_process(
+  COMMAND "${VOICE_RUNTIME}"
+    --log-directory "${debug_bypass_directory}" --log-level debug
+    --debug-enabled false --generation 77
+  INPUT_FILE "${empty_input}"
+  OUTPUT_FILE "${debug_bypass_output}"
+  ERROR_FILE "${debug_bypass_stderr}"
+  RESULT_VARIABLE debug_bypass_result
+  TIMEOUT 5
+)
+if(NOT debug_bypass_result EQUAL 4)
+  message(FATAL_ERROR "voice-runtime accepted debug logging without debug authority")
+endif()
+file(SIZE "${debug_bypass_output}" debug_bypass_output_size)
+file(SIZE "${debug_bypass_stderr}" debug_bypass_stderr_size)
+if(NOT debug_bypass_output_size EQUAL 0 OR debug_bypass_stderr_size EQUAL 0 OR
+   EXISTS "${debug_bypass_directory}")
+  message(FATAL_ERROR "voice-runtime debug bypass changed stdout or initialized logging")
+endif()
+
 get_filename_component(plugin_directory "${MOCK_PLUGIN}" DIRECTORY)
 set(missing_plugin "${plugin_directory}/missing-aivs-plugin")
 execute_process(
   COMMAND "${VOICE_RUNTIME}" --plugin "${missing_plugin}"
-    --log-directory "${log_directory}" --log-level info --generation 1
+    --log-directory "${log_directory}" --log-level info --debug-enabled false --generation 1
   INPUT_FILE "${empty_input}"
   OUTPUT_FILE "${missing_output}"
   ERROR_FILE "${missing_stderr}"
@@ -163,7 +186,7 @@ set(blocked_log_directory "${SMOKE_DIRECTORY}/blocked-log-directory")
 file(WRITE "${blocked_log_directory}" "not a directory")
 execute_process(
   COMMAND "${VOICE_RUNTIME}"
-    --log-directory "${blocked_log_directory}" --log-level info --generation 1
+    --log-directory "${blocked_log_directory}" --log-level info --debug-enabled false --generation 1
   INPUT_FILE "${empty_input}"
   OUTPUT_FILE "${log_failure_output}"
   ERROR_FILE "${log_failure_stderr}"
@@ -184,7 +207,7 @@ function(assert_plugin_setup_failure name plugin)
   set(stderr "${SMOKE_DIRECTORY}/${name}-stderr.txt")
   execute_process(
     COMMAND "${VOICE_RUNTIME}" --plugin "${plugin}"
-      --log-directory "${log_directory}" --log-level info --generation 1
+      --log-directory "${log_directory}" --log-level info --debug-enabled false --generation 1
     INPUT_FILE "${empty_input}"
     OUTPUT_FILE "${output}"
     ERROR_FILE "${stderr}"
