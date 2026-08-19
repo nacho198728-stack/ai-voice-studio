@@ -40,9 +40,9 @@ modified; ADR-003 remains reserved for Phase 1.
   RuntimeHost resolves it only against an explicit absolute host-owned base.
   Absolute, drive-qualified, backslash, empty, dot, parent, NUL, reserved
   characters/control characters, Windows device stems (including extension
-  forms), trailing dot/space, and oversized paths fail validation on every
-  platform. Trace/debug is representable in logging authority only with
-  `debug.enabled=true`.
+  and superscript-digit forms), trailing dot/space, and oversized paths fail
+  validation on every platform. Trace/debug is representable in logging
+  authority only with `debug.enabled=true`.
 - Rust uses Unicode `PathBuf`/`OsStr`; native Windows argument parsing retains
   wide paths and spdlog is compiled with `SPDLOG_WCHAR_FILENAMES`. No logging
   setting is inferred from the environment or current working directory.
@@ -117,7 +117,8 @@ modified; ADR-003 remains reserved for Phase 1.
 - Review portability RED accepted `CON`; GREEN rejects the complete requested
   reserved-device set case-insensitively (including extensions), trailing
   dot/space, control characters, and Windows reserved punctuation independent
-  of the build platform.
+  of the build platform. Follow-up review added Windows' `COM¹/²/³` and
+  `LPT¹/²/³` Unicode aliases to the same platform-independent rejection set.
 - Review UTF-8 RED accepted an invalid native component. GREEN validates
   overlong, surrogate, out-of-range, lone-continuation, and truncated sequences;
   native tests parse every JSONL line and cover escaped controls plus exact
@@ -148,6 +149,7 @@ modified; ADR-003 remains reserved for Phase 1.
 - `9d99ac6` — `docs(logging): record task 11 evidence`
 - `0d418eb` — `fix(logging): guarantee valid UTF-8 JSONL`
 - `065a68c` — `fix(logging): enforce validated logging authority`
+- `94bc56c` — `fix(config): reject superscript device aliases`
 
 ## Self-review and concerns
 
