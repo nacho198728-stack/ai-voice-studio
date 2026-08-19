@@ -14,7 +14,21 @@
 
 static_assert(__cplusplus >= 202002L, "VoiceEngine C++ consumer contract requires C++20 or newer");
 
-static_assert(std::is_same_v<decltype(&aivs_voice_engine_get_api), aivs_voice_engine_get_api_fn>);
+#if defined(_WIN32)
+using aivs_test_expected_factory_fn = aivs_error_code_t(__cdecl*)(
+    const aivs_voice_engine_factory_request_t* request,
+    aivs_voice_engine_api_t* out_api,
+    uint32_t out_api_capacity_bytes);
+#else
+using aivs_test_expected_factory_fn = aivs_error_code_t(*)(
+    const aivs_voice_engine_factory_request_t* request,
+    aivs_voice_engine_api_t* out_api,
+    uint32_t out_api_capacity_bytes);
+#endif
+
+static_assert(
+    std::is_same_v<decltype(&aivs_voice_engine_get_api), aivs_test_expected_factory_fn>);
+static_assert(std::is_same_v<aivs_voice_engine_get_api_fn, aivs_test_expected_factory_fn>);
 static_assert(std::is_same_v<decltype(aivs_voice_engine_api_t::initialize), aivs_initialize_fn>);
 static_assert(std::is_same_v<decltype(aivs_voice_engine_api_t::shutdown), aivs_shutdown_fn>);
 static_assert(std::is_same_v<decltype(aivs_voice_engine_api_t::get_engine_info), aivs_get_engine_info_fn>);

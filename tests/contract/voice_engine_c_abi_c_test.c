@@ -83,6 +83,18 @@ static aivs_error_code_t stub_metrics(
   return AIVS_ERROR_SUCCESS;
 }
 
+#if defined(_WIN32)
+typedef aivs_error_code_t(__cdecl* aivs_test_expected_factory_fn)(
+    const aivs_voice_engine_factory_request_t* request,
+    aivs_voice_engine_api_t* out_api,
+    uint32_t out_api_capacity_bytes);
+#else
+typedef aivs_error_code_t(*aivs_test_expected_factory_fn)(
+    const aivs_voice_engine_factory_request_t* request,
+    aivs_voice_engine_api_t* out_api,
+    uint32_t out_api_capacity_bytes);
+#endif
+
 _Static_assert(sizeof(float) == 4U, "PCM must use four-byte float storage");
 _Static_assert(sizeof(aivs_error_code_t) == 4U, "error code width must remain canonical");
 _Static_assert(sizeof(aivs_bool_t) == 4U, "ABI boolean width drifted");
@@ -96,7 +108,12 @@ _Static_assert(
 _Static_assert(FLT_RADIX == 2, "PCM must use binary radix");
 _Static_assert(FLT_MANT_DIG == 24, "PCM must use binary32 precision");
 _Static_assert(FLT_MAX_EXP == 128 && FLT_MIN_EXP == -125, "PCM must use binary32 exponent range");
-_Static_assert(_Generic(&aivs_voice_engine_get_api, aivs_voice_engine_get_api_fn : 1, default : 0), "factory type drifted");
+_Static_assert(
+    _Generic(&aivs_voice_engine_get_api, aivs_test_expected_factory_fn : 1, default : 0),
+    "factory declaration type drifted");
+_Static_assert(
+    _Generic((aivs_voice_engine_get_api_fn)0, aivs_test_expected_factory_fn : 1, default : 0),
+    "factory typedef drifted");
 _Static_assert(_Generic(((aivs_voice_engine_api_t*)0)->initialize, aivs_initialize_fn : 1, default : 0), "initialize type drifted");
 _Static_assert(_Generic(((aivs_voice_engine_api_t*)0)->shutdown, aivs_shutdown_fn : 1, default : 0), "shutdown type drifted");
 _Static_assert(_Generic(((aivs_voice_engine_api_t*)0)->get_engine_info, aivs_get_engine_info_fn : 1, default : 0), "info type drifted");

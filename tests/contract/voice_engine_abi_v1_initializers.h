@@ -3,6 +3,41 @@
 
 #include <assert.h>
 
+static void assert_bytes_view_defaults(const aivs_bytes_view_t* value) {
+  assert(value->struct_size == sizeof(*value));
+  assert(value->abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
+  assert(value->data == NULL);
+  assert(value->size_bytes == 0U);
+  assert(value->reserved[0] == 0U);
+  assert(value->reserved[1] == 0U);
+}
+
+static void assert_mutable_bytes_buffer_defaults(const aivs_mutable_bytes_buffer_t* value) {
+  assert(value->struct_size == sizeof(*value));
+  assert(value->abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
+  assert(value->data == NULL);
+  assert(value->capacity_bytes == 0U);
+  assert(value->written_or_required_bytes == 0U);
+  assert(value->reserved[0] == 0U);
+  assert(value->reserved[1] == 0U);
+}
+
+static void assert_pcm_mutable_buffer_defaults(const aivs_pcm_mutable_buffer_t* value) {
+  assert(value->struct_size == sizeof(*value));
+  assert(value->abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
+  assert(value->samples == NULL);
+  assert(value->sample_rate_hz == 0U);
+  assert(value->channel_count == 0U);
+  assert(value->format == 0U);
+  assert(value->layout == 0U);
+  assert(value->frame_capacity == 0U);
+  assert(value->frames_written_or_required == 0U);
+  assert(value->sequence == 0U);
+  assert(value->sample_time == 0U);
+  assert(value->reserved[0] == 0U);
+  assert(value->reserved[1] == 0U);
+}
+
 static void assert_voice_engine_abi_v1_initializers(void) {
   const aivs_bytes_view_t bytes = AIVS_BYTES_VIEW_INIT;
   const aivs_mutable_bytes_buffer_t mutable_bytes = AIVS_MUTABLE_BYTES_BUFFER_INIT;
@@ -18,16 +53,8 @@ static void assert_voice_engine_abi_v1_initializers(void) {
   const aivs_reset_result_t reset_result = AIVS_RESET_RESULT_INIT;
   const aivs_voice_engine_api_t api = AIVS_VOICE_ENGINE_API_OUTPUT_INIT;
 
-  assert(bytes.struct_size == sizeof(bytes));
-  assert(bytes.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
-  assert(bytes.data == NULL && bytes.size_bytes == 0U);
-  assert(bytes.reserved[0] == 0U && bytes.reserved[1] == 0U);
-
-  assert(mutable_bytes.struct_size == sizeof(mutable_bytes));
-  assert(mutable_bytes.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
-  assert(mutable_bytes.data == NULL && mutable_bytes.capacity_bytes == 0U);
-  assert(mutable_bytes.written_or_required_bytes == 0U);
-  assert(mutable_bytes.reserved[0] == 0U && mutable_bytes.reserved[1] == 0U);
+  assert_bytes_view_defaults(&bytes);
+  assert_mutable_bytes_buffer_defaults(&mutable_bytes);
 
   assert(pcm.struct_size == sizeof(pcm));
   assert(pcm.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
@@ -36,13 +63,7 @@ static void assert_voice_engine_abi_v1_initializers(void) {
   assert(pcm.frame_count == 0U && pcm.sequence == 0U && pcm.sample_time == 0U);
   assert(pcm.reserved[0] == 0U && pcm.reserved[1] == 0U);
 
-  assert(mutable_pcm.struct_size == sizeof(mutable_pcm));
-  assert(mutable_pcm.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
-  assert(mutable_pcm.samples == NULL && mutable_pcm.sample_rate_hz == 0U);
-  assert(mutable_pcm.channel_count == 0U && mutable_pcm.format == 0U && mutable_pcm.layout == 0U);
-  assert(mutable_pcm.frame_capacity == 0U && mutable_pcm.frames_written_or_required == 0U);
-  assert(mutable_pcm.sequence == 0U && mutable_pcm.sample_time == 0U);
-  assert(mutable_pcm.reserved[0] == 0U && mutable_pcm.reserved[1] == 0U);
+  assert_pcm_mutable_buffer_defaults(&mutable_pcm);
 
   assert(factory.struct_size == sizeof(factory));
   assert(factory.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
@@ -52,8 +73,7 @@ static void assert_voice_engine_abi_v1_initializers(void) {
 
   assert(initialize_request.struct_size == sizeof(initialize_request));
   assert(initialize_request.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
-  assert(initialize_request.configuration_utf8.struct_size == sizeof(aivs_bytes_view_t));
-  assert(initialize_request.configuration_utf8.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
+  assert_bytes_view_defaults(&initialize_request.configuration_utf8);
   assert(initialize_request.reserved[0] == 0U && initialize_request.reserved[1] == 0U);
 
   assert(initialize_result.struct_size == sizeof(initialize_result));
@@ -63,8 +83,8 @@ static void assert_voice_engine_abi_v1_initializers(void) {
 
   assert(info.struct_size == sizeof(info));
   assert(info.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
-  assert(info.engine_name_utf8.struct_size == sizeof(aivs_mutable_bytes_buffer_t));
-  assert(info.engine_version_utf8.struct_size == sizeof(aivs_mutable_bytes_buffer_t));
+  assert_mutable_bytes_buffer_defaults(&info.engine_name_utf8);
+  assert_mutable_bytes_buffer_defaults(&info.engine_version_utf8);
   assert(info.reserved[0] == 0U && info.reserved[1] == 0U);
 
   assert(prepare_request.struct_size == sizeof(prepare_request));
@@ -82,8 +102,7 @@ static void assert_voice_engine_abi_v1_initializers(void) {
 
   assert(process_result.struct_size == sizeof(process_result));
   assert(process_result.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
-  assert(process_result.output.struct_size == sizeof(aivs_pcm_mutable_buffer_t));
-  assert(process_result.output.abi_version == AIVS_VOICE_ENGINE_ABI_V1_VERSION);
+  assert_pcm_mutable_buffer_defaults(&process_result.output);
   assert(process_result.processed_frame_count == 0U && process_result.stream_generation == 0U);
   assert(process_result.reserved[0] == 0U && process_result.reserved[1] == 0U);
 
