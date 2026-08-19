@@ -3,6 +3,12 @@
   "private": true,
   "packageManager": "pnpm@11.19.0",
   "scripts": {
+    "native:build": "cmake --build --preset native-debug",
+    "native:build:release": "cmake --build --preset native-release",
+    "native:configure": "cmake --preset native-debug",
+    "native:configure:release": "cmake --preset native-release",
+    "native:test": "ctest --preset native-debug",
+    "native:test:release": "ctest --preset native-release",
     "format:check": "cargo fmt --all -- --check",
     "workspace:list": "pnpm --recursive list --depth -1"
   }
