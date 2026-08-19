@@ -29,6 +29,8 @@ const MAX_STDERR_TAIL_BYTES: usize = 65_536;
 const MAX_MOCK_WORK_ITERATIONS: u32 = 1_000_000;
 const STDOUT_READ_BYTES: usize = 2_048;
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
+const REAP_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeState {
@@ -486,8 +488,11 @@ impl RequestIds {
 struct PendingRequest {
     command: Command,
     deadline: Instant,
-    reply: oneshot::Sender<Result<Vec<u8>, ManagerError>>,
+    reply: PendingReply,
 }
+
+type PendingReply = oneshot::Sender<Result<Vec<u8>, ManagerError>>;
+type StatusReply = oneshot::Sender<Result<RuntimeStatus, ManagerError>>;
 
 struct PendingRequests {
     maximum: usize,
@@ -558,10 +563,15 @@ impl PendingRequests {
             .collect()
     }
 
+    #[cfg(test)]
     fn fail_one(&mut self, request_id: u64, error: ManagerError) {
         if let Some(pending) = self.entries.remove(&request_id) {
             let _ = pending.reply.send(Err(error));
         }
+    }
+
+    fn take(&mut self, request_id: u64) -> Option<PendingRequest> {
+        self.entries.remove(&request_id)
     }
 
     fn fail_all(&mut self, error: ManagerError) {
@@ -740,6 +750,7 @@ enum StdoutEvent {
     Failure {
         generation: u64,
         error: ManagerError,
+        reason: RuntimeExitReason,
     },
 }
 
@@ -749,6 +760,8 @@ struct ProcessResources {
     stdout_task: JoinHandle<()>,
     stderr_task: JoinHandle<()>,
     stderr_tail: Arc<Mutex<StderrTail>>,
+    exit_status: Option<ExitStatus>,
+    exit_drain_deadline: Option<Instant>,
 }
 
 struct StartContext {
@@ -760,6 +773,7 @@ struct StopContext {
     request_id: u64,
     deadline: Instant,
     response_received: bool,
+    stdout_eof: bool,
     reply: oneshot::Sender<Result<RuntimeStatus, ManagerError>>,
 }
 
@@ -829,6 +843,9 @@ impl Actor {
             self.start.as_ref().map(|start| start.deadline),
             self.stop.as_ref().map(|stop| stop.deadline),
             self.pending.next_deadline(),
+            self.process
+                .as_ref()
+                .and_then(|process| process.exit_drain_deadline),
         ]
         .into_iter()
         .flatten()
@@ -894,15 +911,16 @@ impl Actor {
                 return;
             }
             RuntimeState::Starting => {
-                if let Some(start) = self.start.take() {
-                    let _ = start.reply.send(Err(ManagerError::unavailable(
-                        "Runtime start was cancelled by stop",
-                    )));
-                }
+                let start = self.start.take();
                 let exit = self
                     .reap_process(RuntimeExitReason::RequestedShutdown, true)
                     .await;
                 self.state.stopped(exit);
+                if let Some(start) = start {
+                    let _ = start.reply.send(Err(ManagerError::unavailable(
+                        "Runtime start was cancelled by stop",
+                    )));
+                }
                 let _ = reply.send(Ok(self.status().await));
                 return;
             }
@@ -913,15 +931,6 @@ impl Actor {
                 return;
             }
             RuntimeState::Connected => {}
-        }
-
-        if self.pending.entries.len() >= self.pending.maximum {
-            let _ = reply.send(Err(ManagerError::new(
-                ErrorCode::RuntimeUnavailable,
-                ManagerErrorKind::Capacity,
-                "maximum in-flight request count leaves no room for Shutdown",
-            )));
-            return;
         }
 
         if let Err(error) = self.state.begin_stop() {
@@ -936,9 +945,13 @@ impl Actor {
                     ManagerErrorKind::RequestIdExhausted,
                     "request ID space exhausted",
                 );
-                let _ = reply.send(Err(error.clone()));
-                self.fail_stream(error, RuntimeExitReason::ProtocolFailure)
-                    .await;
+                self.fail_stream_deferred(
+                    error,
+                    RuntimeExitReason::ProtocolFailure,
+                    Some(reply),
+                    None,
+                )
+                .await;
                 return;
             }
         };
@@ -955,9 +968,13 @@ impl Actor {
             Err(error) => {
                 let error =
                     ManagerError::protocol(format!("could not encode Shutdown request: {error:?}"));
-                let _ = reply.send(Err(error.clone()));
-                self.fail_stream(error, RuntimeExitReason::ProtocolFailure)
-                    .await;
+                self.fail_stream_deferred(
+                    error,
+                    RuntimeExitReason::ProtocolFailure,
+                    Some(reply),
+                    None,
+                )
+                .await;
                 return;
             }
         };
@@ -965,11 +982,12 @@ impl Actor {
             request_id,
             deadline: Instant::now() + self.config.shutdown_timeout,
             response_received: false,
+            stdout_eof: false,
             reply,
         });
         if let Err(error) = self.write_frame(&frame, self.config.shutdown_timeout).await {
-            self.fail_stream(error, RuntimeExitReason::ProcessFailure)
-                .await;
+            let reason = failure_exit_reason(&error);
+            self.fail_stream(error, reason).await;
         }
     }
 
@@ -1039,7 +1057,9 @@ impl Actor {
             )
             .expect("pending capacity and fresh monotonic ID were checked");
         if let Err(error) = self.write_frame(&frame, self.config.request_timeout).await {
-            self.fail_stream(error, RuntimeExitReason::ProcessFailure)
+            let pending = self.pending.take(request_id);
+            let reason = failure_exit_reason(&error);
+            self.fail_stream_deferred(error, reason, None, pending)
                 .await;
         }
     }
@@ -1076,19 +1096,23 @@ impl Actor {
         match event {
             StdoutEvent::Message { message, .. } => self.handle_message(message).await,
             StdoutEvent::Eof { clean, .. } => {
-                if clean {
-                    self.handle_exit(None).await;
-                } else {
+                if !clean {
                     self.fail_stream(
                         ManagerError::protocol("Runtime stdout ended with a truncated frame"),
                         RuntimeExitReason::ProtocolFailure,
                     )
                     .await;
+                } else if self.state.state == RuntimeState::Stopping {
+                    if let Some(stop) = self.stop.as_mut() {
+                        stop.stdout_eof = true;
+                    }
+                    self.try_complete_shutdown().await;
+                } else {
+                    self.handle_unexpected_stdout_eof().await;
                 }
             }
-            StdoutEvent::Failure { error, .. } => {
-                self.fail_stream(error, RuntimeExitReason::ProtocolFailure)
-                    .await;
+            StdoutEvent::Failure { error, reason, .. } => {
+                self.fail_stream(error, reason).await;
             }
         }
     }
@@ -1185,6 +1209,38 @@ impl Actor {
             return;
         }
         stop.response_received = true;
+        self.try_complete_shutdown().await;
+    }
+
+    async fn handle_unexpected_stdout_eof(&mut self) {
+        let poll = match self.process.as_mut() {
+            Some(process) if process.exit_status.is_none() => process.child.try_wait(),
+            Some(process) => Ok(process.exit_status),
+            None => return,
+        };
+        match poll {
+            Ok(Some(status)) => {
+                if let Some(process) = self.process.as_mut() {
+                    process.exit_status = Some(status);
+                }
+                self.crash_stream(ManagerError::process("Runtime exited unexpectedly"))
+                    .await;
+            }
+            Ok(None) => {
+                self.fail_stream(
+                    ManagerError::protocol("Runtime stdout closed before a completed shutdown"),
+                    RuntimeExitReason::ProtocolFailure,
+                )
+                .await;
+            }
+            Err(error) => {
+                self.fail_stream(
+                    ManagerError::process(format!("Runtime exit monitoring failed: {error}")),
+                    RuntimeExitReason::ProcessFailure,
+                )
+                .await;
+            }
+        }
     }
 
     async fn handle_deadlines(&mut self) {
@@ -1212,97 +1268,145 @@ impl Actor {
         if let Some(request_id) = self.pending.expired_ids(now).first().copied() {
             let timeout_error =
                 ManagerError::timeout(format!("Runtime request {request_id} timed out"));
-            self.pending.fail_one(request_id, timeout_error.clone());
-            self.fail_stream(timeout_error, RuntimeExitReason::Timeout)
+            let primary = self.pending.take(request_id);
+            self.fail_stream_deferred(timeout_error, RuntimeExitReason::Timeout, None, primary)
                 .await;
+            return;
+        }
+        if self
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_drain_deadline)
+            .is_some_and(|deadline| deadline <= now)
+        {
+            self.crash_stream(ManagerError::process(
+                "Runtime exited without closing its protocol pipe",
+            ))
+            .await;
         }
     }
 
     async fn poll_process_exit(&mut self) {
-        let exited = self
-            .process
-            .as_mut()
-            .and_then(|process| process.child.try_wait().ok().flatten());
-        if let Some(status) = exited {
-            self.handle_exit(Some(status)).await;
+        let result = match self.process.as_mut() {
+            Some(process) if process.exit_status.is_none() => process.child.try_wait(),
+            _ => return,
+        };
+        match result {
+            Ok(None) => {}
+            Ok(Some(status)) => {
+                if let Some(process) = self.process.as_mut() {
+                    process.exit_status = Some(status);
+                    if self.state.state != RuntimeState::Stopping {
+                        process.exit_drain_deadline = Some(Instant::now() + PIPE_DRAIN_TIMEOUT);
+                    }
+                }
+                if self.state.state == RuntimeState::Stopping {
+                    self.try_complete_shutdown().await;
+                }
+            }
+            Err(error) => {
+                self.fail_stream(
+                    ManagerError::process(format!("Runtime exit monitoring failed: {error}")),
+                    RuntimeExitReason::ProcessFailure,
+                )
+                .await;
+            }
         }
     }
 
-    async fn handle_exit(&mut self, known_status: Option<ExitStatus>) {
-        let state_before = self.state.state;
-        let status = match known_status {
-            Some(value) => {
-                self.finish_known_exit().await;
-                Some(value)
-            }
-            None => self.wait_for_natural_exit().await,
+    async fn try_complete_shutdown(&mut self) {
+        let Some(stop) = self.stop.as_ref() else {
+            return;
         };
-        let clean_shutdown = state_before == RuntimeState::Stopping
-            && self
-                .stop
-                .as_ref()
-                .is_some_and(|stop| stop.response_received)
-            && status.is_some_and(|value| value.success());
-        if clean_shutdown {
-            let exit = RuntimeExit::from_status(RuntimeExitReason::RequestedShutdown, status);
-            self.state.stopped(exit);
-            if let Some(stop) = self.stop.take() {
-                let _ = stop.reply.send(Ok(self.status().await));
-            }
+        if stop.stdout_eof && !stop.response_received {
+            self.fail_stream(
+                ManagerError::protocol("Runtime stdout closed before the Shutdown response"),
+                RuntimeExitReason::ProtocolFailure,
+            )
+            .await;
             return;
         }
-
-        let exit = RuntimeExit::from_status(RuntimeExitReason::UnexpectedExit, status);
-        self.state.crashed(exit);
-        let error = ManagerError::process("Runtime exited unexpectedly");
-        self.state.last_error = Some(error.clone());
-        self.pending.fail_all(error.clone());
-        if let Some(start) = self.start.take() {
-            let _ = start.reply.send(Err(error.clone()));
+        if !stop.stdout_eof || !stop.response_received {
+            return;
         }
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.reply.send(Err(error));
-        }
-    }
-
-    async fn wait_for_natural_exit(&mut self) -> Option<ExitStatus> {
-        let mut process = self.process.take()?;
-        drop(process.stdin.take());
-        let status = match timeout(self.config.shutdown_timeout, process.child.wait()).await {
-            Ok(Ok(value)) => Some(value),
-            _ => {
-                let _ = process.child.start_kill();
-                timeout(self.config.shutdown_timeout, process.child.wait())
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-            }
+        let status = self
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_status);
+        let Some(status) = status else {
+            return;
         };
-        self.finish_process_tasks(process).await;
-        status
-    }
-
-    async fn finish_known_exit(&mut self) {
-        if let Some(mut process) = self.process.take() {
-            drop(process.stdin.take());
-            self.finish_process_tasks(process).await;
+        if !status.success() {
+            self.fail_stream(
+                ManagerError::process("Runtime exited unsuccessfully during Shutdown"),
+                RuntimeExitReason::ProcessFailure,
+            )
+            .await;
+            return;
         }
+        let stop = self.stop.take().expect("validated Shutdown context");
+        let exit = self
+            .reap_process(RuntimeExitReason::RequestedShutdown, false)
+            .await;
+        self.state.stopped(exit);
+        self.pending.fail_all(ManagerError::unavailable(
+            "Runtime stopped before request completion",
+        ));
+        let _ = stop.reply.send(Ok(self.status().await));
     }
 
     async fn fail_stream(&mut self, error: ManagerError, reason: RuntimeExitReason) {
-        if let Some(start) = self.start.take() {
-            let _ = start.reply.send(Err(error.clone()));
-        }
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.reply.send(Err(error.clone()));
-        }
-        self.pending.fail_all(ManagerError::unavailable(format!(
-            "Runtime stream invalidated: {}",
-            error.message
-        )));
+        self.fail_stream_deferred(error, reason, None, None).await;
+    }
+
+    async fn fail_stream_deferred(
+        &mut self,
+        error: ManagerError,
+        reason: RuntimeExitReason,
+        extra_stop: Option<StatusReply>,
+        primary: Option<PendingRequest>,
+    ) {
+        let start = self.start.take();
+        let stop = self.stop.take();
+        let has_primary = primary.is_some();
         let exit = self.reap_process(reason, true).await;
         self.state.last_exit = Some(exit);
-        self.state.failed(error);
+        self.state.failed(error.clone());
+        let pending_error = if has_primary {
+            ManagerError::unavailable(format!("Runtime stream invalidated: {}", error.message))
+        } else {
+            error.clone()
+        };
+        self.pending.fail_all(pending_error);
+        if let Some(primary) = primary {
+            let _ = primary.reply.send(Err(error.clone()));
+        }
+        if let Some(start) = start {
+            let _ = start.reply.send(Err(error.clone()));
+        }
+        if let Some(stop) = stop {
+            let _ = stop.reply.send(Err(error.clone()));
+        }
+        if let Some(stop) = extra_stop {
+            let _ = stop.send(Err(error));
+        }
+    }
+
+    async fn crash_stream(&mut self, error: ManagerError) {
+        let start = self.start.take();
+        let stop = self.stop.take();
+        let exit = self
+            .reap_process(RuntimeExitReason::UnexpectedExit, true)
+            .await;
+        self.state.crashed(exit);
+        self.state.last_error = Some(error.clone());
+        self.pending.fail_all(error.clone());
+        if let Some(start) = start {
+            let _ = start.reply.send(Err(error.clone()));
+        }
+        if let Some(stop) = stop {
+            let _ = stop.reply.send(Err(error));
+        }
     }
 
     async fn reap_process(&mut self, reason: RuntimeExitReason, force: bool) -> RuntimeExit {
@@ -1310,16 +1414,19 @@ impl Actor {
             return RuntimeExit::from_status(reason, None);
         };
         drop(process.stdin.take());
-        if force {
+        let mut status = process.exit_status.take();
+        if force && status.is_none() {
             let _ = process.child.start_kill();
         }
-        let mut status = timeout(self.config.shutdown_timeout, process.child.wait())
-            .await
-            .ok()
-            .and_then(Result::ok);
+        if status.is_none() {
+            status = timeout(REAP_TIMEOUT, process.child.wait())
+                .await
+                .ok()
+                .and_then(Result::ok);
+        }
         if status.is_none() {
             let _ = process.child.start_kill();
-            status = timeout(self.config.shutdown_timeout, process.child.wait())
+            status = timeout(REAP_TIMEOUT, process.child.wait())
                 .await
                 .ok()
                 .and_then(Result::ok);
@@ -1328,11 +1435,31 @@ impl Actor {
         RuntimeExit::from_status(reason, status)
     }
 
-    async fn finish_process_tasks(&mut self, process: ProcessResources) {
-        process.stdout_task.abort();
-        process.stderr_task.abort();
-        let _ = process.stdout_task.await;
-        let _ = process.stderr_task.await;
+    async fn finish_process_tasks(&mut self, mut process: ProcessResources) {
+        let deadline = Instant::now() + PIPE_DRAIN_TIMEOUT;
+        let mut stdout_done = false;
+        let mut stderr_done = false;
+        while !stdout_done || !stderr_done {
+            tokio::select! {
+                biased;
+                event = self.events.recv(), if !stdout_done => {
+                    if event.is_none() {
+                        stdout_done = true;
+                    }
+                }
+                _ = &mut process.stdout_task, if !stdout_done => stdout_done = true,
+                _ = &mut process.stderr_task, if !stderr_done => stderr_done = true,
+                _ = tokio::time::sleep_until(deadline) => break,
+            }
+        }
+        if !stdout_done {
+            process.stdout_task.abort();
+            let _ = process.stdout_task.await;
+        }
+        if !stderr_done {
+            process.stderr_task.abort();
+            let _ = process.stderr_task.await;
+        }
         self.state.stderr_tail = process.stderr_tail.lock().await.snapshot();
         self.state.pid = None;
     }
@@ -1347,16 +1474,18 @@ impl Actor {
 
     async fn manager_dropped(&mut self) {
         let error = ManagerError::unavailable("RuntimeManager was dropped");
-        if let Some(start) = self.start.take() {
-            let _ = start.reply.send(Err(error.clone()));
-        }
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.reply.send(Err(error.clone()));
-        }
-        self.pending.fail_all(error);
+        let start = self.start.take();
+        let stop = self.stop.take();
         let _ = self
             .reap_process(RuntimeExitReason::ManagerDropped, true)
             .await;
+        self.pending.fail_all(error.clone());
+        if let Some(start) = start {
+            let _ = start.reply.send(Err(error.clone()));
+        }
+        if let Some(stop) = stop {
+            let _ = stop.reply.send(Err(error));
+        }
     }
 }
 
@@ -1374,7 +1503,12 @@ fn spawn_process(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .kill_on_drop(true)
+        // The Runtime receives no parent environment. Explicit executable and
+        // plugin paths are sufficient on supported platforms, and clearing the
+        // environment prevents loader variables or future UI secrets crossing
+        // the isolation boundary.
+        .env_clear();
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
 
@@ -1402,6 +1536,8 @@ fn spawn_process(
         stdout_task,
         stderr_task,
         stderr_tail,
+        exit_status: None,
+        exit_drain_deadline: None,
     })
 }
 
@@ -1443,6 +1579,7 @@ async fn read_stdout(
                                 ManagerErrorKind::Protocol,
                                 format!("Runtime stdout framing failed: {:?}", error.kind),
                             ),
+                            reason: RuntimeExitReason::ProtocolFailure,
                         })
                         .await;
                     return;
@@ -1455,6 +1592,7 @@ async fn read_stdout(
                         error: ManagerError::process(format!(
                             "Runtime stdout read failed: {error}"
                         )),
+                        reason: RuntimeExitReason::ProcessFailure,
                     })
                     .await;
                 return;
@@ -1480,6 +1618,14 @@ fn remote_error(code: ErrorCode, payload: &[u8]) -> ManagerError {
         ManagerErrorKind::Remote,
         format!("Runtime returned {code:?}: {diagnostic}"),
     )
+}
+
+fn failure_exit_reason(error: &ManagerError) -> RuntimeExitReason {
+    if error.kind == ManagerErrorKind::Timeout {
+        RuntimeExitReason::Timeout
+    } else {
+        RuntimeExitReason::ProcessFailure
+    }
 }
 
 fn validate_success_payload(command: Command, payload: &[u8]) -> Result<(), ManagerError> {

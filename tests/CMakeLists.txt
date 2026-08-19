@@ -101,6 +101,12 @@ add_test(NAME aivs_stdio_runtime_test COMMAND aivs_stdio_runtime_test)
 add_executable(aivs_voice_runtime_smoke runtime/voice_runtime_smoke.cpp)
 target_link_libraries(aivs_voice_runtime_smoke PRIVATE ai_voice_contracts)
 
+add_executable(
+  aivs_runtime_manager_child_fixture
+  fixtures/runtime_manager_child_fixture.cpp
+)
+target_link_libraries(aivs_runtime_manager_child_fixture PRIVATE ai_voice_contracts)
+
 add_test(
   NAME aivs_voice_runtime_smoke
   COMMAND
@@ -133,6 +139,29 @@ add_test(
 )
 set_tests_properties(
   aivs_runtime_manager_child_test
+  PROPERTIES
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    TIMEOUT 60
+)
+
+add_test(
+  NAME aivs_runtime_manager_fixture_test
+  COMMAND
+    ${CMAKE_COMMAND} -E env
+    AIVS_RUNTIME_FIXTURE_PATH=$<TARGET_FILE:aivs_runtime_manager_child_fixture>
+    AIVS_TEST_SECRET=must-not-inherit
+    CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/rust-target
+    ${AIVS_CARGO_EXECUTABLE} test
+    --locked
+    -p ai-voice-runtime-host
+    --test runtime_manager_fixture
+    --
+    --ignored
+    --nocapture
+    --test-threads=1
+)
+set_tests_properties(
+  aivs_runtime_manager_fixture_test
   PROPERTIES
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     TIMEOUT 60
