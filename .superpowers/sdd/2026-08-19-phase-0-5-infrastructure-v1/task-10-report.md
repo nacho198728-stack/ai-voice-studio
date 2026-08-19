@@ -16,11 +16,16 @@ not modified.
 - A dedicated stdout task feeds the shared bounded RuntimeMessage decoder in
   fixed 2,048-byte reads and sends decoded events through a bounded channel.
   A separate stderr task continuously drains into a capped newest-byte tail,
-  so diagnostics cannot block protocol progress or enter stdout.
+  so diagnostics cannot block protocol progress or enter stdout. Reap gives
+  both readers a short bounded drain-to-EOF window while consuming queued
+  stdout events, with task abort only as a fallback.
 - Configuration requires bounded absolute Runtime/plugin paths, rejects
   embedded NUL, zero/oversized timeouts, invalid queue/pending limits, excessive
   stderr retention, and Mock work beyond the native contract before spawn.
-  Launch uses no shell or environment lookup. Windows uses `CREATE_NO_WINDOW`.
+  Launch uses no shell or environment lookup and clears the inherited
+  environment completely; explicit paths are sufficient on the currently
+  verified platform, so no loader-affecting or secret-bearing variables are
+  allowlisted. Windows uses `CREATE_NO_WINDOW`.
 - States are `stopped`, `starting`, `connected`, `stopping`, `crashed`, and
   `error`. Status retains manager generation, live PID, canonical Hello,
   last exit/error, stderr tail, and an explicitly disabled finite restart-policy
@@ -38,10 +43,13 @@ not modified.
   exact nearest deadline ahead of protocol/command work. A timeout fails the
   expired caller with timeout context, fails other pending calls as unavailable,
   kills/reaps the child, and publishes `error` without stale correlation state.
-- Shutdown enters `stopping`, sends a correlated empty Shutdown request, and
-  publishes `stopped` only after its successful response and a clean child
-  exit. Repeated stop while stopped is idempotent; a stop during start cancels
-  and reaps; stop/request/start state conflicts return deterministic errors.
+- Shutdown owns a reserved correlation context independent of the normal
+  pending bound. It enters `stopping`, rejects new normal requests, lets
+  already-written requests settle, and publishes `stopped` only after the
+  successful Shutdown response, ordered stdout EOF, clean child exit, bounded
+  pipe drain, and reap. Process-exit observation never discards queued stdout.
+  Repeated stop while stopped is idempotent; a stop during start cancels and
+  reaps; stop/request/start state conflicts return deterministic errors.
   Unexpected idle exit publishes `crashed`, fails pending calls, and permits a
   later explicit manual start. No automatic or infinite restart was added.
 
@@ -64,7 +72,9 @@ not modified.
 - Typed payload parsing: `apps/runtime-host/src/payload.rs`.
 - Pinned Rust dependencies: `apps/runtime-host/Cargo.toml`, `Cargo.lock`.
 - Real-child integration and CTest wiring:
-  `apps/runtime-host/tests/runtime_manager_process.rs`, `tests/CMakeLists.txt`.
+  `apps/runtime-host/tests/runtime_manager_process.rs`,
+  `apps/runtime-host/tests/runtime_manager_fixture.rs`, `tests/CMakeLists.txt`,
+  `tests/fixtures/runtime_manager_child_fixture.cpp`.
 
 ## Red-green evidence
 
@@ -85,6 +95,15 @@ not modified.
   start/Hello plus concurrent Ping/capability plus checksum pipeline plus clean
   stop, final-handle drop cleanup, idle crash detection and explicit restart,
   timeout invalidation/no-orphan, and bounded pre-Hello stderr diagnostics.
+- Review-fix RED reproduced the reported failures with a BUILD_TESTING-only
+  child fixture: inherited environment leaked, full-pending stop returned
+  `Capacity`, stdout-close-then-hang exceeded the earlier handshake deadline,
+  and response/exit ordering and completion barriers failed. GREEN covers 50
+  immediate response-plus-exit shutdowns per run, handshake timeout/wrong
+  pre-Hello/truncation, shutdown and request timeouts, stdout-close hang,
+  full/cancelled pending stop, fatal correlation with a saturated event queue,
+  final stderr drain, and an empty child environment. Each error-return test
+  asserts the PID is already gone; timeout/protocol exit reasons are retained.
 
 ## Verification
 
@@ -93,13 +112,16 @@ not modified.
   passed without warnings.
 - `cargo +1.97.1 check --locked --workspace` — passed.
 - `cargo +1.97.1 test --locked --workspace` — passed: 22 Rust unit/integration
-  tests run, 0 failed; five native-path cases are intentionally CTest-owned.
+  tests run, 0 failed; five native-path and nine controlled-fixture cases are
+  intentionally CTest-owned.
 - `pnpm contracts:check` and `pnpm test` — passed: contract generation current,
   Node suites 13/13.
-- Fresh Debug configure/build/CTest — passed 14/14, including RuntimeManager
-  real-child tests.
-- Fresh Release configure/build/CTest — passed 14/14, including timeout and
-  no-orphan coverage.
+- Fresh Debug configure/build/CTest — passed 15/15, including RuntimeManager
+  real-child and controlled-fixture tests.
+- Fresh Release configure/build/CTest — passed 15/15, including timeout,
+  ordered shutdown, environment isolation, final stderr, and no-orphan coverage.
+- Debug real-child plus controlled-fixture CTests passed five consecutive runs;
+  each controlled run includes 50 immediate shutdown races.
 - `git diff --check` and staged diff check — passed.
 - Local Rust target inventory contains only `aarch64-apple-darwin`; Windows
   source coverage includes Tokio's Windows process API and
@@ -108,6 +130,7 @@ not modified.
 ## Commit
 
 - `8f7ae60` — `feat(runtime-host): add actor-owned RuntimeManager`
+- `9f77de9` — `fix(runtime-host): enforce ordered reap barriers`
 
 ## Self-review
 
@@ -115,7 +138,8 @@ not modified.
   actor owner; stdout/stderr helpers cannot mutate lifecycle/correlation state.
 - Fatal protocol and timeout paths clear all pending calls before a later
   explicit start, and every cleanup path drops stdin, signals the child, waits,
-  joins/aborts pipe tasks, and snapshots bounded diagnostics.
+  reaps, bounded-drains/joins pipe tasks, snapshots diagnostics, publishes
+  state, and only then releases the initiating lifecycle reply.
 - Codec policy remains the frame-size/direction authority; command parsers add
   only payload semantics. No protocol schema, native Runtime, Mock plugin, ADR,
   plan checkbox, desktop, logging, config/capability module, or audio code was
