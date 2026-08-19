@@ -10,15 +10,21 @@ not modified.
 ## Manager and lifecycle decisions
 
 - `RuntimeManager` is a cloneable bounded command handle. Its actor exclusively
-  owns `tokio::process::Child` and the piped stdin writer. The final handle
-  disappearing closes the channel; the actor kills and waits for the child,
-  with `kill_on_drop` as the runtime-teardown safety net.
+  owns `tokio::process::Child`, lifecycle/correlation state, and a bounded
+  outbound queue. One actor-owned writer task exclusively owns ChildStdin and
+  reports write completion/failure through the bounded process-event channel,
+  so an OS pipe write can never block actor deadlines or exit observation. The
+  final handle disappearing closes the command channel; the actor aborts the
+  writer, kills, and waits for the child, with `kill_on_drop` as the teardown
+  safety net.
 - A dedicated stdout task feeds the shared bounded RuntimeMessage decoder in
   fixed 2,048-byte reads and sends decoded events through a bounded channel.
   A separate stderr task continuously drains into a capped newest-byte tail,
   so diagnostics cannot block protocol progress or enter stdout. Reap gives
-  both readers a short bounded drain-to-EOF window while consuming queued
-  stdout events, with task abort only as a fallback.
+  both readers a short bounded drain-to-EOF window with an absolute first-
+  priority deadline and a separate 64-event stdout discard cap. Hitting the
+  stdout cap aborts that reader while stderr/writer joining retains the
+  remaining absolute window; task abort remains the final fallback.
 - Configuration requires bounded absolute Runtime/plugin paths, rejects
   embedded NUL, zero/oversized timeouts, invalid queue/pending limits, excessive
   stderr retention, and Mock work beyond the native contract before spawn.
@@ -39,8 +45,10 @@ not modified.
   ID plus exact echoed command. Unknown, duplicate, mismatched, malformed, or
   invalid-success responses invalidate the stream and force termination/reap.
 - Handshake, stdin write, command response, shutdown response/exit, pending
-  count, queues, frames, paths, and stderr are bounded. The actor selects the
-  exact nearest deadline ahead of protocol/command work. A timeout fails the
+  count, queues, frames, paths, and stderr are bounded. The writer queue has
+  `max_in_flight + 1` slots, preserving one Shutdown slot even when every
+  normal request is pending. The actor selects deadline, exit poll, process
+  events, then ordinary commands in priority order. A timeout fails the
   expired caller with timeout context, fails other pending calls as unavailable,
   kills/reaps the child, and publishes `error` without stale correlation state.
 - Shutdown owns a reserved correlation context independent of the normal
@@ -87,7 +95,7 @@ not modified.
   GREEN: actor scheduling now selects the exact nearest deadline with deadline
   priority; the bounded 1,000,000-iteration Mock request times out, invalidates
   the stream, and proves the PID is reaped in both Debug and Release.
-- Final Rust unit set passes 11 tests covering state transitions, configuration
+- Final Rust unit set passes 12 tests covering state transitions, configuration
   and NUL rejection, request-ID exhaustion, pending bound/correlation/
   duplicate/mismatch/timeout failure, command-specific success payloads,
   canonical JSON, fixed binary summary, and stderr retention.
@@ -104,6 +112,18 @@ not modified.
   full/cancelled pending stop, fatal correlation with a saturated event queue,
   final stderr drain, and an empty child environment. Each error-return test
   asserts the PID is already gone; timeout/protocol exit reasons are retained.
+- Re-review RED established each remaining starvation path independently.
+  Eight inherited-stdout descendants kept the bounded event channel hot and
+  showed cleanup waiting for the drain timer without an independent work cap.
+  A unit test filled a real OS ChildStdin pipe before dispatch and proved the
+  synchronous actor write masked an already-existing 50 ms pending deadline
+  beyond 500 ms. A Hello-then-no-read fixture drives maximum bounded pipe
+  pressure using only the 64 allowed Ping requests. Finally, an exited owned
+  child with a silent inherited stdout holder stayed `connected` for 750 ms
+  under 256 concurrent status
+  producers. GREEN uses the absolute/capped drain, dedicated bounded writer,
+  and deadline → exit → event → command scheduling. All initiating
+  errors still return only after PID disappearance and final state publication.
 
 ## Verification
 
@@ -111,8 +131,8 @@ not modified.
 - `cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings` —
   passed without warnings.
 - `cargo +1.97.1 check --locked --workspace` — passed.
-- `cargo +1.97.1 test --locked --workspace` — passed: 22 Rust unit/integration
-  tests run, 0 failed; five native-path and nine controlled-fixture cases are
+- `cargo +1.97.1 test --locked --workspace` — passed: 23 Rust unit/integration
+  tests run, 0 failed; five native-path and 12 controlled-fixture cases are
   intentionally CTest-owned.
 - `pnpm contracts:check` and `pnpm test` — passed: contract generation current,
   Node suites 13/13.
@@ -121,7 +141,10 @@ not modified.
 - Fresh Release configure/build/CTest — passed 15/15, including timeout,
   ordered shutdown, environment isolation, final stderr, and no-orphan coverage.
 - Debug real-child plus controlled-fixture CTests passed five consecutive runs;
-  each controlled run includes 50 immediate shutdown races.
+  each controlled run includes 50 immediate shutdown races, continuous
+  inherited stdout, blocked stdin, and 256-producer command starvation cases.
+  A final process-table check found no fixture, Runtime, or controlled sleep
+  process remaining.
 - `git diff --check` and staged diff check — passed.
 - Local Rust target inventory contains only `aarch64-apple-darwin`; Windows
   source coverage includes Tokio's Windows process API and
@@ -131,11 +154,13 @@ not modified.
 
 - `8f7ae60` — `feat(runtime-host): add actor-owned RuntimeManager`
 - `9f77de9` — `fix(runtime-host): enforce ordered reap barriers`
+- `6f43096` — `fix(runtime-host): prevent actor deadline starvation`
 
 ## Self-review
 
-- Process, stdin, pending map, request IDs, transitions, and deadlines have one
-  actor owner; stdout/stderr helpers cannot mutate lifecycle/correlation state.
+- Process, pending map, request IDs, transitions, and deadlines have one actor
+  owner. The bounded writer task owns only ChildStdin; stdout/stderr/writer
+  helpers report events but cannot mutate lifecycle/correlation state.
 - Fatal protocol and timeout paths clear all pending calls before a later
   explicit start, and every cleanup path drops stdin, signals the child, waits,
   reaps, bounded-drains/joins pipe tasks, snapshots diagnostics, publishes
