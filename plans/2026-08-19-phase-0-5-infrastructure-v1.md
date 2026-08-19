@@ -36,7 +36,7 @@
 
 - [x] 固定工具链与开发环境契约。声明支持的 Node、pnpm、Rust stable、CMake、C++20、Xcode 和 Visual Studio 版本，提供只检查不修改机器的 doctor 脚本，并在开发文档中分别给出 macOS 与 Windows 的官方安装来源。受影响路径包括 `.node-version`、`rust-toolchain.toml`、`tools/scripts` 和 `docs/development/DEVELOPMENT.md`。这样可以避免开发者依赖当前机器的隐式路径或全局 Tauri CLI。
 
-- [ ] 定义跨语言版本与 ErrorCode。`core/contracts/version.json` 记录 Runtime、protocol、VoiceEngine ABI 和兼容规则；`error-codes.json` 固定错误名称、数值和语义，再映射到 Rust/C++ 类型并检测漂移。
+- [x] 定义跨语言版本与 ErrorCode。`core/contracts/version.json` 记录 Runtime、protocol、VoiceEngine ABI 和兼容规则；`error-codes.json` 固定错误名称、数值和语义，再映射到 Rust/C++ 类型并检测漂移。
 
 - [ ] 定义第一版 VoiceEngine C ABI 及其合同。`runtime/api/voice_engine.h` 覆盖规定的八类操作，结构携带 ABI version 与 struct size；ADR 明确 caller-owned buffer、编码、错误/异常边界、生命周期和线程规则，prepare 后的处理调用禁止分配、锁和日志。
 
