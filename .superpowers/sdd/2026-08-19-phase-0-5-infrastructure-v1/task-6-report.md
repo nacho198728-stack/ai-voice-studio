@@ -146,3 +146,20 @@ Engine, IPC, Rust FFI, Tauri integration, device access, or model execution.
 ### Review-fix commit
 
 - `4ca0e78` — `fix(runtime): freeze VoiceEngine ABI v1 contract`
+
+## Review fix round 3
+
+- Factory output capacity is now unambiguously explicit; bounded clearing uses
+  byte canaries including true mid-pointer capacity 12, and full capacity gets
+  typed NULL assignments while partial output must be discarded/reinitialized.
+- Process failure normalization now requires explicit outer/nested capacities
+  and writes only fully covered fields. The contract restores complete lifecycle
+  transitions, latency units, info/metrics/prepare/reset failure rules, and
+  deterministic error precedence.
+- Generator validation keeps frozen v1 independent of the active compatibility
+  floor; tests generate/check a v1=1, active=[2,2] fixture. The supported flat
+  64-bit address model and numeric wrap helper are explicit.
+
+### Review-fix commit
+
+- `c375177` — `fix(runtime): harden VoiceEngine ABI failure contract`
