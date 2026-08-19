@@ -111,6 +111,7 @@ add_test(
   NAME aivs_runtime_late_log_failure_test
   COMMAND aivs_runtime_late_log_failure_test $<TARGET_FILE:voice-runtime>
 )
+set_tests_properties(aivs_runtime_late_log_failure_test PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(aivs_runtime_session_test runtime/runtime_session_test.cpp)
 target_link_libraries(aivs_runtime_session_test PRIVATE ai_voice_runtime_session)

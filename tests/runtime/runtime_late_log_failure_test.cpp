@@ -9,7 +9,7 @@
 int main() {
   // Windows has no POSIX FIFO. The instance-owned error-handler code still
   // compiles here; Windows filesystem fault injection remains a CI extension.
-  return 0;
+  return 77;
 }
 
 #else
