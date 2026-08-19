@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,6 +19,18 @@ namespace runtime = ai_voice::runtime;
 using ai_voice::contracts::ErrorCode;
 
 namespace {
+
+class FixedPipeline final : public runtime::PipelineService {
+ public:
+  [[nodiscard]] bool available() const noexcept override { return true; }
+
+  runtime::PipelineRunResult run(std::span<const std::uint8_t> request_payload) noexcept override {
+    last_request.assign(request_payload.begin(), request_payload.end());
+    return {ErrorCode::Success, {0x01U, 0x02U, 0x03U}};
+  }
+
+  std::vector<std::uint8_t> last_request;
+};
 
 std::vector<std::uint8_t> bytes(std::string_view value) {
   return {value.begin(), value.end()};
@@ -135,6 +148,26 @@ void mock_pipeline_is_uniformly_unavailable_without_engine_behavior() {
   assert(text(result.response->payload) == R"({"error":"engine_unavailable"})");
 }
 
+void loaded_pipeline_is_reported_truthfully_and_receives_only_control_bytes() {
+  FixedPipeline pipeline;
+  runtime::Session session(1U, &pipeline);
+  assert(session.start().has_value());
+
+  const auto capabilities =
+      session.handle(request(76U, message::Command::GetCapabilities));
+  assert(capabilities.response->error_code == ErrorCode::Success);
+  assert(text(capabilities.response->payload).find(R"("backend":"mock")") !=
+         std::string::npos);
+  assert(text(capabilities.response->payload).find(R"("engine":"aivs-mock-v1")") !=
+         std::string::npos);
+
+  const auto pipeline_result =
+      session.handle(request(77U, message::Command::RunMockPipeline, {0xA1U, 0xB2U}));
+  assert(pipeline_result.response->error_code == ErrorCode::Success);
+  assert(pipeline_result.response->payload == std::vector<std::uint8_t>({0x01U, 0x02U, 0x03U}));
+  assert(pipeline.last_request == std::vector<std::uint8_t>({0xA1U, 0xB2U}));
+}
+
 void shutdown_is_finite_and_later_requests_are_not_processed() {
   runtime::Session session(11U);
   assert(session.start().has_value());
@@ -221,6 +254,7 @@ int main() {
   ping_echoes_the_exact_bounded_payload_and_correlation();
   capabilities_are_minimal_truthful_and_deterministic();
   mock_pipeline_is_uniformly_unavailable_without_engine_behavior();
+  loaded_pipeline_is_reported_truthfully_and_receives_only_control_bytes();
   shutdown_is_finite_and_later_requests_are_not_processed();
   invalid_inbound_direction_causes_a_protocol_failure_without_response();
   clean_eof_and_failures_have_distinct_terminal_snapshots();

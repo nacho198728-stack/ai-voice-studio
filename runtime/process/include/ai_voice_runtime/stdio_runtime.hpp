@@ -9,6 +9,8 @@
 
 namespace ai_voice::runtime {
 
+class PipelineService;
+
 inline constexpr std::size_t kStdioReadChunkBytes =
     contracts::runtime_message::kHeaderSize * contracts::runtime_message::kMaxMessagesPerFeed;
 static_assert(kStdioReadChunkBytes <= contracts::runtime_message::kMaxInputBytesPerFeed);
@@ -48,8 +50,9 @@ enum class ProcessExitCode : int {
     ByteReader& input,
     ByteWriter& output,
     std::ostream& diagnostics,
-    std::uint64_t generation) noexcept;
+    std::uint64_t generation,
+    PipelineService* pipeline = nullptr) noexcept;
 
-[[nodiscard]] ProcessExitCode run_native_stdio() noexcept;
+[[nodiscard]] ProcessExitCode run_native_stdio(int argc, char** argv) noexcept;
 
 }  // namespace ai_voice::runtime

@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
+#include <vector>
 
 #include <ai_voice_contracts/runtime_message.hpp>
 
@@ -52,9 +54,21 @@ struct DispatchResult {
   DispatchDisposition disposition;
 };
 
+struct PipelineRunResult {
+  contracts::ErrorCode error_code;
+  std::vector<std::uint8_t> payload;
+};
+
+class PipelineService {
+ public:
+  virtual ~PipelineService() = default;
+  [[nodiscard]] virtual bool available() const noexcept = 0;
+  virtual PipelineRunResult run(std::span<const std::uint8_t> request_payload) noexcept = 0;
+};
+
 class Session {
  public:
-  explicit Session(std::uint64_t generation);
+  explicit Session(std::uint64_t generation, PipelineService* pipeline = nullptr);
 
   [[nodiscard]] SessionSnapshot snapshot() const noexcept;
   [[nodiscard]] std::optional<contracts::runtime_message::RuntimeMessage> start();
@@ -71,6 +85,7 @@ class Session {
   [[nodiscard]] DispatchResult protocol_failure() noexcept;
 
   SessionSnapshot snapshot_;
+  PipelineService* pipeline_;
 };
 
 }  // namespace ai_voice::runtime

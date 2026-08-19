@@ -5,11 +5,15 @@
 #include <cstdio>
 #include <csignal>
 #include <iostream>
+#include <memory>
 #include <ostream>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include <ai_voice_contracts/runtime_message.hpp>
+#include <ai_voice_runtime/mock_pipeline.hpp>
+#include <ai_voice_runtime/runtime_options.hpp>
 #include <ai_voice_runtime/session.hpp>
 
 #if defined(_WIN32)
@@ -114,8 +118,9 @@ ProcessExitCode run_stdio(
     ByteReader& input,
     ByteWriter& output,
     std::ostream& diagnostics,
-    std::uint64_t generation) noexcept {
-  Session session(generation);
+    std::uint64_t generation,
+    PipelineService* pipeline) noexcept {
+  Session session(generation, pipeline);
   try {
     const auto hello = session.start();
     if (!hello.has_value()) {
@@ -198,14 +203,47 @@ ProcessExitCode run_stdio(
   }
 }
 
-ProcessExitCode run_native_stdio() noexcept {
+ProcessExitCode run_native_stdio(int argc, char** argv) noexcept {
+  std::unique_ptr<MockPipeline> pipeline;
+  try {
+    if (argc < 1 || argv == nullptr) {
+      diagnostic(std::cerr, "voice-runtime: invalid process arguments");
+      return ProcessExitCode::UnexpectedFailure;
+    }
+    std::vector<std::string_view> arguments;
+    arguments.reserve(static_cast<std::size_t>(argc - 1));
+    for (int index = 1; index < argc; ++index) {
+      if (argv[index] == nullptr) {
+        diagnostic(std::cerr, "voice-runtime: invalid null command-line argument");
+        return ProcessExitCode::UnexpectedFailure;
+      }
+      arguments.emplace_back(argv[index]);
+    }
+    const auto parsed = parse_runtime_options(arguments);
+    if (!parsed.options.has_value()) {
+      diagnostic(std::cerr, parsed.diagnostic);
+      return ProcessExitCode::UnexpectedFailure;
+    }
+    if (parsed.options->plugin_path.has_value()) {
+      auto created = MockPipeline::create(
+          *parsed.options->plugin_path, parsed.options->mock_work_iterations);
+      if (created.error_code != contracts::ErrorCode::Success || !created.pipeline) {
+        diagnostic(std::cerr, created.diagnostic);
+        return ProcessExitCode::UnexpectedFailure;
+      }
+      pipeline = std::move(created.pipeline);
+    }
+  } catch (...) {
+    diagnostic(std::cerr, "voice-runtime: setup failed unexpectedly");
+    return ProcessExitCode::UnexpectedFailure;
+  }
   if (!configure_native_stdio()) {
     diagnostic(std::cerr, "voice-runtime: stdio configuration failed");
     return ProcessExitCode::UnexpectedFailure;
   }
   NativeStdinReader input;
   NativeStdoutWriter output;
-  return run_stdio(input, output, std::cerr, 1U);
+  return run_stdio(input, output, std::cerr, 1U, pipeline.get());
 }
 
 }  // namespace ai_voice::runtime

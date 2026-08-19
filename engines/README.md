@@ -1,3 +1,5 @@
 # Engines
 
-Owns VoiceEngine implementations and adapters. Engines will be loaded by the runtime through a stable C ABI; no engine is implemented in this scaffold.
+Owns VoiceEngine implementations and adapters loaded by the Runtime through the
+stable C ABI. `mock/` is the dependency-free deterministic Phase 0.5 plugin; it
+does not access audio devices, files, networks, AI runtimes, or model formats.

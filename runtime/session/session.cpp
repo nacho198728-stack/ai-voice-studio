@@ -65,7 +65,7 @@ constexpr std::string_view architecture_name() {
 #endif
 }
 
-std::vector<std::uint8_t> capabilities_payload() {
+std::vector<std::uint8_t> capabilities_payload(bool mock_available) {
   std::string output;
   output.reserve(192U);
   output.append(R"({"platform":")");
@@ -76,7 +76,9 @@ std::vector<std::uint8_t> capabilities_payload() {
   output.append(contracts::kRuntimeVersion);
   output.append(R"(","protocol_version":)");
   append_unsigned(output, contracts::kIpcProtocolCurrentVersion);
-  output.append(R"(,"backend":"unavailable","engine":"unavailable"})");
+  output.append(
+      mock_available ? R"(,"backend":"mock","engine":"aivs-mock-v1"})"
+                     : R"(,"backend":"unavailable","engine":"unavailable"})");
   return payload(output);
 }
 
@@ -103,8 +105,9 @@ std::vector<std::uint8_t> state_error_payload(ErrorCode error_code) {
 
 }  // namespace
 
-Session::Session(std::uint64_t generation)
-    : snapshot_{generation, SessionState::Starting, SessionHealth::Starting, ExitReason::None} {}
+Session::Session(std::uint64_t generation, PipelineService* pipeline)
+    : snapshot_{generation, SessionState::Starting, SessionHealth::Starting, ExitReason::None},
+      pipeline_(pipeline) {}
 
 SessionSnapshot Session::snapshot() const noexcept {
   return snapshot_;
@@ -157,10 +160,21 @@ DispatchResult Session::handle(const message::RuntimeMessage& inbound) {
           response(inbound, ErrorCode::Success, inbound.payload), DispatchDisposition::Respond};
     case message::Command::GetCapabilities:
       return {
-          response(inbound, ErrorCode::Success, capabilities_payload()),
+          response(
+              inbound,
+              ErrorCode::Success,
+              capabilities_payload(pipeline_ != nullptr && pipeline_->available())),
           DispatchDisposition::Respond,
       };
     case message::Command::RunMockPipeline:
+      if (pipeline_ != nullptr && pipeline_->available()) {
+        auto pipeline_result = pipeline_->run(inbound.payload);
+        return {
+            response(
+                inbound, pipeline_result.error_code, std::move(pipeline_result.payload)),
+            DispatchDisposition::Respond,
+        };
+      }
       return {
           response(
               inbound,

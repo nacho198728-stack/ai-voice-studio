@@ -32,6 +32,35 @@ std::vector<message::RuntimeMessage> decode_file(const std::string& path) {
   return decoded.messages;
 }
 
+std::uint32_t read_u32(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+  std::uint32_t value = 0U;
+  for (std::size_t index = 0U; index < 4U; ++index) {
+    value |= static_cast<std::uint32_t>(bytes[offset + index]) << (index * 8U);
+  }
+  return value;
+}
+
+std::uint64_t read_u64(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+  std::uint64_t value = 0U;
+  for (std::size_t index = 0U; index < 8U; ++index) {
+    value |= static_cast<std::uint64_t>(bytes[offset + index]) << (index * 8U);
+  }
+  return value;
+}
+
+void write_frames(const std::string& path, const std::vector<message::RuntimeMessage>& messages) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  assert(output.good());
+  for (const auto& message : messages) {
+    const auto encoded = message::encode(message);
+    assert(!encoded.error.has_value());
+    output.write(
+        reinterpret_cast<const char*>(encoded.bytes.data()),
+        static_cast<std::streamsize>(encoded.bytes.size()));
+  }
+  assert(output.good());
+}
+
 void write_shutdown(const std::string& path) {
   const message::RuntimeMessage request{
       message::MessageKind::Request,
@@ -51,6 +80,29 @@ void write_shutdown(const std::string& path) {
   assert(output.good());
 }
 
+void write_pipeline_shutdown(const std::string& path) {
+  write_frames(
+      path,
+      {
+          {
+              message::MessageKind::Request,
+              ai_voice::contracts::kIpcProtocolCurrentVersion,
+              76U,
+              message::Command::RunMockPipeline,
+              ErrorCode::Success,
+              {},
+          },
+          {
+              message::MessageKind::Request,
+              ai_voice::contracts::kIpcProtocolCurrentVersion,
+              77U,
+              message::Command::Shutdown,
+              ErrorCode::Success,
+              {},
+          },
+      });
+}
+
 void verify_hello(const message::RuntimeMessage& hello) {
   assert(hello.kind == message::MessageKind::Hello);
   assert(hello.protocol_version == ai_voice::contracts::kIpcProtocolCurrentVersion);
@@ -64,6 +116,36 @@ void verify_hello(const message::RuntimeMessage& hello) {
   assert(payload.find("\"health\":\"starting\"") != std::string::npos);
 }
 
+void verify_pipeline(const std::vector<message::RuntimeMessage>& frames) {
+  assert(frames.size() == 3U);
+  verify_hello(frames[0]);
+  const auto& pipeline = frames[1];
+  assert(pipeline.kind == message::MessageKind::Response);
+  assert(pipeline.request_id == 76U);
+  assert(pipeline.command == message::Command::RunMockPipeline);
+  assert(pipeline.error_code == ErrorCode::Success);
+  assert(pipeline.payload.size() == 80U);
+  assert(read_u32(pipeline.payload, 0U) == 1U);
+  assert(read_u32(pipeline.payload, 4U) == 80U);
+  assert(read_u32(pipeline.payload, 8U) == 128U);
+  assert(read_u32(pipeline.payload, 12U) == 2U);
+  assert(read_u64(pipeline.payload, 16U) == UINT64_C(0x3ECD5190F6F4F725));
+  assert(read_u64(pipeline.payload, 32U) == 0U);
+  assert(read_u64(pipeline.payload, 40U) == 1U);
+  assert(read_u64(pipeline.payload, 48U) == 1U);
+  assert(read_u64(pipeline.payload, 56U) == 128U);
+  assert(read_u64(pipeline.payload, 64U) == 128U);
+  assert(read_u64(pipeline.payload, 72U) == 0U);
+  assert(frames[2] == message::RuntimeMessage({
+                          message::MessageKind::Response,
+                          ai_voice::contracts::kIpcProtocolCurrentVersion,
+                          77U,
+                          message::Command::Shutdown,
+                          ErrorCode::Success,
+                          {},
+                      }));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -74,11 +156,19 @@ int main(int argc, char** argv) {
     write_shutdown(path);
     return 0;
   }
+  if (mode == "write-pipeline-shutdown") {
+    write_pipeline_shutdown(path);
+    return 0;
+  }
 
   const auto frames = decode_file(path);
   if (mode == "verify-eof") {
     assert(frames.size() == 1U);
     verify_hello(frames[0]);
+    return 0;
+  }
+  if (mode == "verify-pipeline") {
+    verify_pipeline(frames);
     return 0;
   }
   assert(mode == "verify-shutdown");

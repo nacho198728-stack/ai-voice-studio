@@ -4,13 +4,15 @@
 
 `voice-runtime` is a C++20 isolated process. Standard input and standard output
 carry only RuntimeMessage v1 frames. Standard error is reserved for bounded
-diagnostics. Phase 0.5 does not load a VoiceEngine, access audio devices, parse
-models, send PCM/model bytes, or implement restart behavior.
+diagnostics. Phase 0.5 can load the deterministic Mock VoiceEngine through the
+frozen C ABI, but does not access audio devices, parse real models, send
+PCM/model bytes, or implement restart behavior.
 
-The process writes one Hello frame before reading standard input. All JSON below
-is compact UTF-8 with the shown key order, no insignificant whitespace, and
-base-10 locale-independent unsigned integers. Runtime and protocol versions
-come from the generated canonical contracts.
+After command-line/plugin setup succeeds, the process writes one Hello frame
+before reading standard input. All JSON below is compact UTF-8 with the shown
+key order, no insignificant whitespace, and base-10 locale-independent unsigned
+integers. Runtime and protocol versions come from the generated canonical
+contracts.
 
 ## Payloads
 
@@ -25,10 +27,23 @@ come from the generated canonical contracts.
 - GetCapabilities request: empty. Its successful response is compact JSON:
   `{"platform":"<macos|windows|linux|unknown>","architecture":"<arm64|x86_64|unknown>","runtime_version":"<semver>","protocol_version":<u32>,"backend":"unavailable","engine":"unavailable"}`.
   This is process/build identity only, not a hardware, device, benchmark, or
-  broader capability model.
-- RunMockPipeline: parameters remain opaque bounded control bytes. Until Task 8
-  installs Mock, every valid request returns `EngineUnavailable` with
-  `{"error":"engine_unavailable"}`. No pipeline work occurs.
+  broader capability model. Without a plugin, backend and engine are
+  `unavailable`; after successful Mock setup they are `mock` and
+  `aivs-mock-v1`.
+- RunMockPipeline request: exactly empty. Non-empty control bytes return
+  `InvalidArgument` with `{"error":"invalid_mock_pipeline_request"}`. Without a
+  plugin, the response remains `EngineUnavailable` with
+  `{"error":"engine_unavailable"}`.
+- RunMockPipeline success: exactly 80 little-endian bytes, with no PCM. Offsets
+  are: schema version `u32` at 0 (value 1), result size `u32` at 4 (80), frames
+  `u32` at 8, channels `u32` at 12, checksum `u64` at 16, Runtime-measured
+  elapsed microseconds `u64` at 24, exact algorithmic latency frames `u64` at
+  32, processed stream generation `u64` at 40, then cumulative process calls,
+  input frames, output frames, and process errors as `u64` at 48, 56, 64, and
+  72. Phase 0.5 uses 128 frames, two channels, and zero algorithmic latency.
+  Checksum is FNV-1a 64 over each output float's IEEE-754 bits serialized least
+  significant byte first; the fixed input and sign-bit-flip Mock transform
+  produce `0x3ecd5190f6f4f725`.
 - Shutdown request and successful response: empty. The Runtime enters stopping
   before returning the response; the adapter writes and flushes the entire
   response, marks the session stopped, and exits without dispatching later
@@ -57,7 +72,26 @@ Process exit values are:
 - `2`: malformed, oversized, unsupported, truncated, or wrong-direction input;
 - `3`: stdout full-frame write or flush failure;
 - `4`: stdin failure, codec/output construction invariant failure, stdio setup
-  failure, or unexpected exception.
+  failure, invalid CLI/setup, plugin load/negotiation/initialization failure, or
+  unexpected exception. Setup failures occur before Hello, emit a bounded
+  diagnostic only to stderr, and write zero stdout bytes.
+
+## Mock plugin setup
+
+`voice-runtime` accepts no implicit plugin source. The optional CLI is
+`--plugin <absolute-path>` plus optional
+`--mock-work-iterations <0..1000000>` in either order. Unknown, duplicate,
+missing, relative, or malformed arguments are rejected; configuration is never
+read from environment variables or a search path. The Mock configuration sent
+to the plugin is the strict UTF-8 form `{"work_iterations":N}`. The simulated
+model contract is identifier `mock-v1` with an empty model-data view.
+
+The Mock accepts float32 interleaved PCM at 8–192 kHz, one or two channels, a
+nonzero stream id, and 1–4096 maximum frames. It precomputes state at prepare,
+flips only the sign bit of each float during process (including exact in-place),
+and performs optional bounded deterministic CPU work. The hot call allocates
+nothing, takes no blocking lock, and performs no I/O, logging, clock, or
+environment access; Runtime measures time around it.
 
 The native adapter derives its 2,048-byte read size from the shared 32-byte
 header and 64-message feed cap. That keeps every feed below both the shared
