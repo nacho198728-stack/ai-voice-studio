@@ -9,7 +9,9 @@
     "native:configure:release": "cmake --preset native-release",
     "native:test": "ctest --preset native-debug",
     "native:test:release": "ctest --preset native-release",
+    "test:doctor": "node --test tools/scripts/doctor.test.mjs",
     "format:check": "cargo fmt --all -- --check",
+    "doctor": "node tools/scripts/doctor.mjs",
     "workspace:list": "pnpm --recursive list --depth -1"
   }
 }
