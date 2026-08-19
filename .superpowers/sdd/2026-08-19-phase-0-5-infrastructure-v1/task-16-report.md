@@ -3,9 +3,10 @@
 ## Status
 
 Complete on macOS arm64. The process-integration gate now combines the existing
-real-child and controlled-child suites with a dedicated seven-case gate for the
-remaining hostile process scenarios. One production teardown defect was found
-and fixed. The main plan checkbox was not modified and ADR-003 was not created.
+real-child and controlled-child suites with a dedicated eleven-case gate for
+the remaining hostile process scenarios. Review found and fixed two related
+production teardown ownership defects. The main plan checkbox was not modified
+and ADR-003 was not created.
 
 Real Windows process execution remains Task 18; this report claims only source
 and argument-construction coverage for Windows.
@@ -49,24 +50,48 @@ The new `runtime_manager_gate` adds only the missing observable process cases:
 7. Dropping the owning Tokio runtime aborts the internal manager actor while a
    manager handle remains alive; the child is synchronously killed and reaped,
    verified through its concrete PID.
+8. Cross-runtime callers prove that an accepted Ping, capability observation,
+   concurrent Stop waiters, and a command accepted into an undriven one-slot
+   Actor queue cannot resolve or close before the exact child PID disappears.
 
 Every new async case has a ten-second outer deadline, two-second bounded polls,
 and a concrete-PID cleanup guard. The runtime-abort case installs its PID guard
-before allowing the owner thread to drop the Tokio runtime. The Unicode test
-also has a directory cleanup guard. CTest adds an independent 90-second process
-boundary.
+before allowing the owner thread to drop the Tokio runtime. Review-round abort
+cases retain and join the owner thread, and the queued case proves queue
+acceptance before triggering abort. The Unicode test also has a directory
+cleanup guard. CTest adds an independent 90-second process boundary.
 
 ## Production defect and fix
 
-The runtime-abort RED proved that Tokio's `kill_on_drop(true)` kills an owned
-child but does not synchronously wait for it. On POSIX the concrete PID remained
-observable as an unreaped zombie after the owning runtime aborted the actor.
+The first runtime-abort RED proved that Tokio's `kill_on_drop(true)` kills an
+owned child but does not synchronously wait for it. On POSIX the concrete PID
+remained observable as an unreaped zombie after the owning runtime aborted the
+actor.
 
-`ProcessResources::drop` is now a last-resort, cross-platform reap barrier. It
-first performs a nonblocking reap, requests termination only when still live,
-then polls `try_wait` for at most the existing two-second reap bound. Normal
-manager operations still use the existing asynchronous shutdown/kill/wait and
-pipe-drain path; the Drop barrier only closes abrupt actor/runtime teardown.
+Review-round RED then proved a stricter production defect: Rust field/local
+drop order closed an accepted Ping reply before the same PID was reaped. The
+process could also be temporarily moved out of `Actor` across async waits, so an
+Actor destructor could not impose the required reply barrier. Finally, the
+initial fallback treated `try_wait` errors as completion and abandoned the
+child after two seconds to Tokio's orphan queue even though that runtime could
+already be gone.
+
+`Actor::drop` now explicitly transfers the process, original command receiver,
+pending/start/stop contexts, active status sender, and deferred accepted replies
+to one `ActorAbortOwner`. It aborts pipe helpers, retries kill and nonblocking
+wait without treating errors as reap, and only fails/drains replies after reap.
+If the two-second synchronous window expires, the entire owner moves to an
+independent `std::thread`; a failed thread spawn retains ownership and continues
+reaping on the current thread. Normal async paths retain `ProcessResources` and
+all reply contexts in Actor fields until wait and pipe drain complete.
+
+`ProcessResources::drop` is an independent last defense with the same retry
+semantics. Its normal already-reaped path is constant time. An unreaped child
+that exceeds the bounded synchronous window is moved to its own standard-thread
+reaper and never depends on a destroyed Tokio driver or orphan queue. A fake
+reap driver covers initial/poll `try_wait` errors, `start_kill` errors, timeout
+classification, and delayed completion ownership without platform-specific or
+unsafe APIs.
 
 ## RED/GREEN evidence
 
@@ -77,9 +102,15 @@ pipe-drain path; the Drop barrier only closes abrupt actor/runtime teardown.
   the intended missing-fixture reason.
 - Runtime-abort RED independently captured PID survival after Tokio runtime
   destruction. This was a production failure, not a fixture-only gap.
+- Review-round RED captured an accepted Ping returning `ManagerClosed` while
+  its concrete PID was still observable. This isolated reply/process ownership
+  order from the earlier zombie-only failure.
 - GREEN: the controlled child gained only deterministic modes needed by the
   tests, generation parsing from the actual manager argument, and no manager
-  logic duplication. The dedicated gate passes 7/7 in Debug and Release.
+  logic duplication. The dedicated gate passes 11/11 in Debug and Release.
+- The four cross-runtime cancellation barriers passed ten consecutive focused
+  gate runs. Three synchronous reaper tests cover error retry, honest timeout,
+  and delayed detached-owner completion.
 - The three focused RuntimeManager process suites passed five consecutive Debug
   runs: real child 5/5 each run, legacy controlled fixture 17/17 each run, and
   the new gate 7/7 each run.
@@ -102,7 +133,8 @@ pipe-drain path; the Drop barrier only closes abrupt actor/runtime teardown.
   mapping.
 - **No orphan before replies:** legacy stop, timeout, drop, concurrent Stop,
   desktop-exit race, and queue-starvation tests; new actor/runtime abort fallback
-  and per-case concrete PID guards. No process-name-only assertion is used as
+  plus accepted request/capability/Stop/queued-command reply barriers and
+  per-case concrete PID guards. No process-name-only assertion is used as
   primary evidence.
 - **Generation/restart:** legacy successful and failed capability observations
   reject stale generation 1 after restart; new queued generation-1 response
@@ -114,17 +146,15 @@ pipe-drain path; the Drop barrier only closes abrupt actor/runtime teardown.
 
 ## Verification
 
-- Fresh Debug configure/build followed by CTest: 24/24 passed.
-- Fresh Release configure/build followed by CTest: 24/24 passed.
-- Production-fix rerun of Debug CTest: 24/24 passed.
-- Production-fix rerun of Release CTest: 24/24 passed.
-- Focused RuntimeManager real/fixture/gate CTests repeated five times in Debug:
-  all 15 invocations passed.
+- Review-fix Debug build and CTest: 24/24 passed.
+- Review-fix Release build and CTest: 24/24 passed.
+- Focused eleven-case RuntimeManager gate repeated ten times in Debug: all ten
+  invocations passed.
 - `cargo +1.97.1 fmt --all -- --check`: passed.
 - `cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings`:
   passed without warnings.
 - `cargo +1.97.1 check --locked --workspace --all-targets`: passed.
-- `cargo +1.97.1 test --locked --workspace`: 60 passed, 0 failed; native-path
+- `cargo +1.97.1 test --locked --workspace`: 63 passed, 0 failed; native-path
   integration cases remain intentionally ignored here and run by CTest.
 - `pnpm contracts:check`: passed with no generated drift.
 - Root `pnpm test`: 26 passed, 0 failed.
@@ -147,8 +177,9 @@ pipe-drain path; the Drop barrier only closes abrupt actor/runtime teardown.
 
 No audio device, Audio Engine, AI model/runtime, Python, UI feature, IPC
 transport replacement, cloud, installer, plan checkbox, or ADR was added. The
-new fixture behavior is BUILD_TESTING-only and production Runtime behavior is
-unchanged except for the bounded abrupt-drop reap fallback.
+new fixture behavior is BUILD_TESTING-only. Production behavior changes only in
+RuntimeManager teardown ownership and fail-safe reap; normal async start,
+request, orderly Shutdown, wait, and pipe-drain behavior is retained.
 
 Windows source and construction tests compile only when Task 18 runs on the real
 Windows x64/MSVC runner. This macOS task does not claim Windows process-launch,

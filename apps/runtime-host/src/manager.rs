@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use ai_voice_capability::{
@@ -40,6 +41,7 @@ const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 const MAX_PIPE_DRAIN_EVENTS: usize = 64;
 const REAP_TIMEOUT: Duration = Duration::from_secs(2);
+const SYNC_REAP_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const TELEMETRY_COMPONENT: &str = "runtime-host";
 
 const fn telemetry_level(level: ConfigLogLevel) -> TelemetryLevel {
@@ -1288,7 +1290,7 @@ struct WriteCommand {
 }
 
 struct ProcessResources {
-    child: Child,
+    child: Option<Child>,
     writer_tx: Option<mpsc::Sender<WriteCommand>>,
     writer_task: JoinHandle<()>,
     stdout_task: JoinHandle<()>,
@@ -1298,22 +1300,121 @@ struct ProcessResources {
     exit_drain_deadline: Option<Instant>,
 }
 
+trait SynchronousReap {
+    fn try_reap(&mut self) -> io::Result<bool>;
+    fn request_kill(&mut self) -> io::Result<()>;
+}
+
+fn synchronous_reap_until<T: SynchronousReap>(
+    process: &mut T,
+    deadline: std::time::Instant,
+) -> bool {
+    loop {
+        if matches!(process.try_reap(), Ok(true)) {
+            return true;
+        }
+        let _ = process.request_kill();
+        if matches!(process.try_reap(), Ok(true)) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(SYNC_REAP_POLL_INTERVAL);
+    }
+}
+
+fn synchronous_reap_to_completion<T: SynchronousReap>(process: &mut T) {
+    while !synchronous_reap_until(process, std::time::Instant::now() + SYNC_REAP_POLL_INTERVAL) {}
+}
+
+impl SynchronousReap for ProcessResources {
+    fn try_reap(&mut self) -> io::Result<bool> {
+        if self.exit_status.is_some() || self.child.is_none() {
+            return Ok(true);
+        }
+        match self
+            .child
+            .as_mut()
+            .expect("live child is present")
+            .try_wait()?
+        {
+            Some(status) => {
+                self.exit_status = Some(status);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn request_kill(&mut self) -> io::Result<()> {
+        match self.child.as_mut() {
+            Some(child) => child.start_kill(),
+            None => Ok(()),
+        }
+    }
+}
+
+struct DetachedChild {
+    child: Child,
+}
+
+impl SynchronousReap for DetachedChild {
+    fn try_reap(&mut self) -> io::Result<bool> {
+        self.child.try_wait().map(|status| status.is_some())
+    }
+
+    fn request_kill(&mut self) -> io::Result<()> {
+        self.child.start_kill()
+    }
+}
+
+fn spawn_detached_reaper<T>(owner: T, name: &'static str, reap: fn(&mut T))
+where
+    T: Send + 'static,
+{
+    // Arc keeps ownership recoverable if the OS refuses to create the thread:
+    // a failed spawn drops its closure captures, but must never drop the child.
+    let shared = Arc::new(StdMutex::new(Some(owner)));
+    let worker = Arc::clone(&shared);
+    let spawn = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            let mut owner = worker
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+                .expect("detached reap owner is present");
+            reap(&mut owner);
+        });
+    if spawn.is_err() {
+        let mut owner = shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .expect("failed spawn retained the reap owner");
+        reap(&mut owner);
+    }
+}
+
 impl Drop for ProcessResources {
     fn drop(&mut self) {
-        // Actor cancellation can bypass the async reap path (for example when
-        // its owning Tokio runtime is destroyed). kill_on_drop terminates but
-        // does not wait on POSIX, so retain a bounded synchronous reap barrier.
-        if self.child.try_wait().ok().flatten().is_some() {
+        self.writer_tx.take();
+        self.writer_task.abort();
+        self.stdout_task.abort();
+        self.stderr_task.abort();
+        if self.exit_status.is_some() || self.child.is_none() {
             return;
         }
-        let _ = self.child.start_kill();
-        let deadline = std::time::Instant::now() + REAP_TIMEOUT;
-        while std::time::Instant::now() < deadline {
-            match self.child.try_wait() {
-                Ok(Some(_)) | Err(_) => return,
-                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-            }
+        if synchronous_reap_until(self, std::time::Instant::now() + REAP_TIMEOUT) {
+            return;
         }
+        let child = self.child.take().expect("unreaped child is present");
+        spawn_detached_reaper(
+            DetachedChild { child },
+            "runtime-child-reaper",
+            synchronous_reap_to_completion,
+        );
     }
 }
 
@@ -1369,6 +1470,90 @@ impl Drop for StopContext {
     }
 }
 
+struct ActorAbortOwner {
+    process: Option<ProcessResources>,
+    commands: mpsc::Receiver<ActorCommand>,
+    generation: u64,
+    pending: PendingRequests,
+    start: Option<StartContext>,
+    stop: Option<StopContext>,
+    active_status: Option<oneshot::Sender<RuntimeStatus>>,
+    deferred_primary: Option<PendingRequest>,
+    deferred_stop: Option<StatusReply>,
+}
+
+impl ActorAbortOwner {
+    fn prepare_process(&mut self) {
+        if let Some(process) = self.process.as_mut() {
+            process.writer_tx.take();
+            process.writer_task.abort();
+            process.stdout_task.abort();
+            process.stderr_task.abort();
+        }
+    }
+
+    fn reap_until(&mut self, deadline: std::time::Instant) -> bool {
+        self.prepare_process();
+        self.process
+            .as_mut()
+            .is_none_or(|process| synchronous_reap_until(process, deadline))
+    }
+
+    fn reap_and_fail(&mut self) {
+        self.prepare_process();
+        if let Some(process) = self.process.as_mut() {
+            synchronous_reap_to_completion(process);
+        }
+        self.process.take();
+        self.fail_replies();
+    }
+
+    fn fail_replies(&mut self) {
+        let error = ManagerError::closed();
+        self.pending.fail_all(error.clone());
+        if let Some(primary) = self.deferred_primary.take() {
+            primary.fail(error.clone());
+        }
+        if let Some(start) = self.start.take() {
+            let _ = start.reply.send(Err(error.clone()));
+        }
+        if let Some(stop) = self.stop.take() {
+            stop.complete(Err(error.clone()));
+        }
+        if let Some(stop) = self.deferred_stop.take() {
+            let _ = stop.send(Err(error.clone()));
+        }
+        // Status has no error payload. Retaining its sender until this point is
+        // the barrier; dropping it now maps to ManagerClosed at the API edge.
+        self.active_status.take();
+
+        self.commands.close();
+        while let Ok(command) = self.commands.try_recv() {
+            match command {
+                ActorCommand::Start { reply } | ActorCommand::Stop { reply } => {
+                    let _ = reply.send(Err(error.clone()));
+                }
+                ActorCommand::Status { reply } => drop(reply),
+                ActorCommand::CapabilitiesNotEvaluated { reply } => {
+                    let _ = reply.send(CapabilityObservation::not_evaluated(self.generation));
+                }
+                ActorCommand::ObserveCapabilities { reply } => {
+                    let _ = reply.send(CapabilityObservation::inconclusive(
+                        self.generation,
+                        error.clone(),
+                    ));
+                }
+                ActorCommand::Request { reply, .. } => {
+                    let _ = reply.send(Err(RuntimeRequestFailure {
+                        generation: self.generation,
+                        error: error.clone(),
+                    }));
+                }
+            }
+        }
+    }
+}
+
 struct Actor {
     config: RuntimeManagerConfig,
     commands: mpsc::Receiver<ActorCommand>,
@@ -1380,6 +1565,47 @@ struct Actor {
     process: Option<ProcessResources>,
     start: Option<StartContext>,
     stop: Option<StopContext>,
+    active_status: Option<oneshot::Sender<RuntimeStatus>>,
+    deferred_primary: Option<PendingRequest>,
+    deferred_stop: Option<StatusReply>,
+}
+
+impl Drop for Actor {
+    fn drop(&mut self) {
+        if self.process.is_none()
+            && self.pending.entries.is_empty()
+            && self.start.is_none()
+            && self.stop.is_none()
+            && self.active_status.is_none()
+            && self.deferred_primary.is_none()
+            && self.deferred_stop.is_none()
+        {
+            return;
+        }
+        let (_, empty_commands) = mpsc::channel(1);
+        let maximum = self.pending.maximum;
+        let mut owner = ActorAbortOwner {
+            process: self.process.take(),
+            commands: std::mem::replace(&mut self.commands, empty_commands),
+            generation: self.state.generation,
+            pending: std::mem::replace(&mut self.pending, PendingRequests::new(maximum)),
+            start: self.start.take(),
+            stop: self.stop.take(),
+            active_status: self.active_status.take(),
+            deferred_primary: self.deferred_primary.take(),
+            deferred_stop: self.deferred_stop.take(),
+        };
+        if owner.reap_until(std::time::Instant::now() + REAP_TIMEOUT) {
+            owner.process.take();
+            owner.fail_replies();
+        } else {
+            spawn_detached_reaper(
+                owner,
+                "runtime-actor-reaper",
+                ActorAbortOwner::reap_and_fail,
+            );
+        }
+    }
 }
 
 impl Actor {
@@ -1400,6 +1626,9 @@ impl Actor {
             process: None,
             start: None,
             stop: None,
+            active_status: None,
+            deferred_primary: None,
+            deferred_stop: None,
         }
     }
 
@@ -1449,7 +1678,11 @@ impl Actor {
             ActorCommand::Start { reply } => self.start_runtime(reply).await,
             ActorCommand::Stop { reply } => self.stop_runtime(reply).await,
             ActorCommand::Status { reply } => {
-                let _ = reply.send(self.status().await);
+                self.active_status = Some(reply);
+                let status = self.status().await;
+                if let Some(reply) = self.active_status.take() {
+                    let _ = reply.send(status);
+                }
             }
             ActorCommand::CapabilitiesNotEvaluated { reply } => {
                 let _ = reply.send(CapabilityObservation::not_evaluated(self.state.generation));
@@ -1497,7 +1730,7 @@ impl Actor {
         );
         match spawn_process(&self.config, generation, self.event_tx.clone()) {
             Ok(process) => {
-                self.state.pid = process.child.id();
+                self.state.pid = process.child.as_ref().and_then(Child::id);
                 self.process = Some(process);
                 self.start = Some(StartContext {
                     deadline: Instant::now() + self.config.handshake_timeout,
@@ -1529,17 +1762,20 @@ impl Actor {
                 return;
             }
             RuntimeState::Starting => {
-                let start = self.start.take();
+                self.deferred_stop = Some(reply);
                 let exit = self
                     .reap_process(RuntimeExitReason::RequestedShutdown, true)
                     .await;
                 self.state.stopped(exit);
-                if let Some(start) = start {
+                if let Some(start) = self.start.take() {
                     let _ = start.reply.send(Err(ManagerError::unavailable(
                         "Runtime start was cancelled by stop",
                     )));
                 }
-                let _ = reply.send(Ok(self.status().await));
+                let status = self.status().await;
+                if let Some(reply) = self.deferred_stop.take() {
+                    let _ = reply.send(Ok(status));
+                }
                 return;
             }
             RuntimeState::Stopping => {
@@ -1899,7 +2135,11 @@ impl Actor {
 
     async fn handle_unexpected_stdout_eof(&mut self) {
         let poll = match self.process.as_mut() {
-            Some(process) if process.exit_status.is_none() => process.child.try_wait(),
+            Some(process) if process.exit_status.is_none() => process
+                .child
+                .as_mut()
+                .expect("live process has a child")
+                .try_wait(),
             Some(process) => Ok(process.exit_status),
             None => return,
         };
@@ -1973,7 +2213,11 @@ impl Actor {
 
     async fn poll_process_exit(&mut self) {
         let result = match self.process.as_mut() {
-            Some(process) if process.exit_status.is_none() => process.child.try_wait(),
+            Some(process) if process.exit_status.is_none() => process
+                .child
+                .as_mut()
+                .expect("live process has a child")
+                .try_wait(),
             _ => return,
         };
         match result {
@@ -2029,7 +2273,7 @@ impl Actor {
             .await;
             return;
         }
-        let stop = self.stop.take().expect("validated Shutdown context");
+        let request_id = stop.request_id;
         let exit = self
             .reap_process(RuntimeExitReason::RequestedShutdown, false)
             .await;
@@ -2037,13 +2281,16 @@ impl Actor {
         telemetry(
             TelemetryLevel::Info,
             "Runtime shutdown completed",
-            Some(stop.request_id),
+            Some(request_id),
             Some(self.state.generation),
         );
         self.pending.fail_all(ManagerError::unavailable(
             "Runtime stopped before request completion",
         ));
-        stop.complete(Ok(self.status().await));
+        let status = self.status().await;
+        if let Some(stop) = self.stop.take() {
+            stop.complete(Ok(status));
+        }
     }
 
     async fn fail_stream(&mut self, error: ManagerError, reason: RuntimeExitReason) {
@@ -2063,9 +2310,11 @@ impl Actor {
             None,
             Some(self.state.generation),
         );
-        let start = self.start.take();
-        let stop = self.stop.take();
-        let has_primary = primary.is_some();
+        debug_assert!(self.deferred_primary.is_none());
+        debug_assert!(self.deferred_stop.is_none());
+        self.deferred_primary = primary;
+        self.deferred_stop = extra_stop;
+        let has_primary = self.deferred_primary.is_some();
         let exit = self.reap_process(reason, true).await;
         self.state.last_exit = Some(exit);
         self.state.failed(error.clone());
@@ -2075,16 +2324,16 @@ impl Actor {
             error.clone()
         };
         self.pending.fail_all(pending_error);
-        if let Some(primary) = primary {
+        if let Some(primary) = self.deferred_primary.take() {
             primary.fail(error.clone());
         }
-        if let Some(start) = start {
+        if let Some(start) = self.start.take() {
             let _ = start.reply.send(Err(error.clone()));
         }
-        if let Some(stop) = stop {
+        if let Some(stop) = self.stop.take() {
             stop.complete(Err(error.clone()));
         }
-        if let Some(stop) = extra_stop {
+        if let Some(stop) = self.deferred_stop.take() {
             let _ = stop.send(Err(error));
         }
     }
@@ -2096,52 +2345,69 @@ impl Actor {
             None,
             Some(self.state.generation),
         );
-        let start = self.start.take();
-        let stop = self.stop.take();
         let exit = self
             .reap_process(RuntimeExitReason::UnexpectedExit, true)
             .await;
         self.state.crashed(exit);
         self.state.last_error = Some(error.clone());
         self.pending.fail_all(error.clone());
-        if let Some(start) = start {
+        if let Some(start) = self.start.take() {
             let _ = start.reply.send(Err(error.clone()));
         }
-        if let Some(stop) = stop {
+        if let Some(stop) = self.stop.take() {
             stop.complete(Err(error));
         }
     }
 
     async fn reap_process(&mut self, reason: RuntimeExitReason, force: bool) -> RuntimeExit {
-        let Some(mut process) = self.process.take() else {
+        let Some(process) = self.process.as_mut() else {
             return RuntimeExit::from_status(reason, None);
         };
         drop(process.writer_tx.take());
         if force {
             process.writer_task.abort();
         }
-        let mut status = process.exit_status.take();
+        let mut status = process.exit_status;
         if force && status.is_none() {
-            let _ = process.child.start_kill();
+            let _ = process.request_kill();
         }
         if status.is_none() {
-            status = timeout(REAP_TIMEOUT, process.child.wait())
-                .await
-                .ok()
-                .and_then(Result::ok);
+            status = match process.child.as_mut() {
+                Some(child) => timeout(REAP_TIMEOUT, child.wait())
+                    .await
+                    .ok()
+                    .and_then(Result::ok),
+                None => None,
+            };
         }
         if status.is_none() {
-            let _ = process.child.start_kill();
-            status = timeout(REAP_TIMEOUT, process.child.wait())
-                .await
-                .ok()
-                .and_then(Result::ok);
+            let _ = process.request_kill();
+            status = match process.child.as_mut() {
+                Some(child) => timeout(REAP_TIMEOUT, child.wait())
+                    .await
+                    .ok()
+                    .and_then(Result::ok),
+                None => None,
+            };
         }
-        self.finish_process_tasks(process).await;
+        process.exit_status = status;
+        if process.exit_status.is_none() {
+            // The asynchronous driver can be disappearing underneath an Actor
+            // cancellation. A final synchronous path never treats wait/kill
+            // errors as proof that the OS child was reaped.
+            synchronous_reap_to_completion(process);
+        }
+        status = process.exit_status;
+        self.finish_process_tasks().await;
+        self.process.take();
         RuntimeExit::from_status(reason, status)
     }
 
-    async fn finish_process_tasks(&mut self, mut process: ProcessResources) {
+    async fn finish_process_tasks(&mut self) {
+        let process = self
+            .process
+            .as_mut()
+            .expect("process is retained through reap");
         let deadline = Instant::now() + PIPE_DRAIN_TIMEOUT;
         let mut stdout_done = false;
         let mut stderr_done = false;
@@ -2205,16 +2471,14 @@ impl Actor {
             Some(self.state.generation),
         );
         let error = ManagerError::unavailable("RuntimeManager was dropped");
-        let start = self.start.take();
-        let stop = self.stop.take();
         let _ = self
             .reap_process(RuntimeExitReason::ManagerDropped, true)
             .await;
         self.pending.fail_all(error.clone());
-        if let Some(start) = start {
+        if let Some(start) = self.start.take() {
             let _ = start.reply.send(Err(error.clone()));
         }
-        if let Some(stop) = stop {
+        if let Some(stop) = self.stop.take() {
             stop.complete(Err(error));
         }
     }
@@ -2276,7 +2540,7 @@ fn spawn_process(
     let stdout_task = tokio::spawn(read_stdout(stdout, generation, events));
     let stderr_task = tokio::spawn(read_stderr(stderr, Arc::clone(&stderr_tail)));
     Ok(ProcessResources {
-        child,
+        child: Some(child),
         writer_tx: Some(writer_tx),
         writer_task,
         stdout_task,
@@ -2413,9 +2677,11 @@ fn validate_success_payload(command: Command, payload: &[u8]) -> Result<(), Mana
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::future::pending;
     use std::pin::Pin;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::{Context, Poll, Waker};
     use std::time::Duration;
 
@@ -2435,6 +2701,124 @@ mod tests {
         Inconclusive,
         Mock,
         Unavailable,
+    }
+
+    #[derive(Clone, Copy)]
+    enum ReapStep {
+        Error,
+        Pending,
+        Reaped,
+    }
+
+    struct FakeReap {
+        polls: VecDeque<ReapStep>,
+        kill_errors_remaining: usize,
+        kill_calls: usize,
+    }
+
+    impl SynchronousReap for FakeReap {
+        fn try_reap(&mut self) -> io::Result<bool> {
+            match self.polls.pop_front().unwrap_or(ReapStep::Pending) {
+                ReapStep::Error => Err(io::Error::other("controlled try_wait failure")),
+                ReapStep::Pending => Ok(false),
+                ReapStep::Reaped => Ok(true),
+            }
+        }
+
+        fn request_kill(&mut self) -> io::Result<()> {
+            self.kill_calls += 1;
+            if self.kill_errors_remaining == 0 {
+                Ok(())
+            } else {
+                self.kill_errors_remaining -= 1;
+                Err(io::Error::other("controlled start_kill failure"))
+            }
+        }
+    }
+
+    #[test]
+    fn synchronous_reaper_retries_wait_and_kill_errors_until_reaped() {
+        let mut process = FakeReap {
+            polls: VecDeque::from([
+                ReapStep::Error,
+                ReapStep::Error,
+                ReapStep::Pending,
+                ReapStep::Reaped,
+            ]),
+            kill_errors_remaining: 1,
+            kill_calls: 0,
+        };
+
+        assert!(synchronous_reap_until(
+            &mut process,
+            std::time::Instant::now() + Duration::from_millis(100)
+        ));
+        assert_eq!(process.kill_calls, 2);
+        assert_eq!(process.kill_errors_remaining, 0);
+    }
+
+    #[test]
+    fn synchronous_reaper_timeout_does_not_claim_wait_errors_were_reaped() {
+        let mut process = FakeReap {
+            polls: VecDeque::from([ReapStep::Error, ReapStep::Error]),
+            kill_errors_remaining: 1,
+            kill_calls: 0,
+        };
+
+        assert!(!synchronous_reap_until(
+            &mut process,
+            std::time::Instant::now()
+        ));
+        assert_eq!(process.kill_calls, 1);
+    }
+
+    struct DelayedReapOwner {
+        ready: Arc<AtomicBool>,
+        completion: Option<std::sync::mpsc::Sender<()>>,
+    }
+
+    impl SynchronousReap for DelayedReapOwner {
+        fn try_reap(&mut self) -> io::Result<bool> {
+            Ok(self.ready.load(Ordering::Acquire))
+        }
+
+        fn request_kill(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn reap_delayed_owner(owner: &mut DelayedReapOwner) {
+        synchronous_reap_to_completion(owner);
+        owner
+            .completion
+            .take()
+            .expect("completion sender is present")
+            .send(())
+            .expect("completion receiver is present");
+    }
+
+    #[test]
+    fn detached_reaper_retains_completion_ownership_until_reap() {
+        let ready = Arc::new(AtomicBool::new(false));
+        let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+        let mut owner = DelayedReapOwner {
+            ready: Arc::clone(&ready),
+            completion: Some(completion_tx),
+        };
+        assert!(!synchronous_reap_until(
+            &mut owner,
+            std::time::Instant::now()
+        ));
+        spawn_detached_reaper(owner, "controlled-delayed-reaper", reap_delayed_owner);
+
+        assert_eq!(
+            completion_rx.recv_timeout(Duration::from_millis(25)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        ready.store(true, Ordering::Release);
+        completion_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("completion stayed bounded after reap became observable");
     }
 
     fn test_observation(kind: TestObservation, generation: u64) -> CapabilityObservation {
@@ -2725,7 +3109,7 @@ mod tests {
         actor.state.connected(pid, canonical_test_hello());
         let (writer_tx, writer_rx) = mpsc::channel(actor.config.max_in_flight + 1);
         actor.process = Some(ProcessResources {
-            child,
+            child: Some(child),
             writer_tx: Some(writer_tx),
             writer_task: tokio::spawn(write_stdin(stdin, writer_rx, event_tx)),
             stdout_task: tokio::spawn(pending()),

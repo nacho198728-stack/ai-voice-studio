@@ -411,6 +411,11 @@ int run_loop(std::string_view mode) {
         continue;
       }
       if (request.command == message::Command::GetCapabilities) {
+        if (mode == "capability-hang") {
+          std::fputs("capability-held\n", stderr);
+          std::fflush(stderr);
+          hang();
+        }
         if (mode == "capability-error") {
           if (!send(error_response(request, ErrorCode::EngineUnavailable))) {
             return 3;

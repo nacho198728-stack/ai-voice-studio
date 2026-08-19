@@ -319,6 +319,232 @@ fn aborting_the_owning_tokio_runtime_reaps_the_child() {
     guard.disarm();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn actor_abort_holds_an_accepted_request_reply_until_its_pid_is_reaped() {
+    bounded(async {
+        let fixture = fixture_path();
+        let (manager_sender, manager_receiver) = std_mpsc::sync_channel(1);
+        let (abort_sender, abort_receiver) = std_mpsc::sync_channel(1);
+        let owner = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            let manager = runtime.block_on(async {
+                let mut config = RuntimeManagerConfig::new(
+                    fixture,
+                    std::env::temp_dir().join("request-timeout"),
+                );
+                config.request_timeout = Duration::from_secs(10);
+                let manager = RuntimeManager::new(config).unwrap();
+                let pid = manager.start_runtime().await.unwrap().pid.unwrap();
+                manager_sender.send((manager.clone(), pid)).unwrap();
+                manager
+            });
+            abort_receiver
+                .recv_timeout(CASE_DEADLINE)
+                .expect("external caller did not request actor abort");
+            drop(runtime);
+            drop(manager);
+        });
+        let (manager, pid) = manager_receiver
+            .recv_timeout(CASE_DEADLINE)
+            .expect("owner runtime did not publish the manager and PID");
+        let mut guard = ProcessGuard::new(pid);
+        let request_manager = manager.clone();
+        let request = tokio::spawn(async move { request_manager.ping(b"held").await });
+        wait_for_stderr(&manager, b"ping-held").await;
+
+        abort_sender.send(()).unwrap();
+        let error = request.await.unwrap().unwrap_err();
+
+        assert_eq!(error.kind, ManagerErrorKind::ManagerClosed);
+        assert!(
+            !process_exists(pid).await,
+            "accepted request closed before PID {pid} was reaped"
+        );
+        tokio::task::spawn_blocking(move || owner.join().unwrap())
+            .await
+            .unwrap();
+        guard.disarm();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn actor_abort_holds_stop_waiters_until_their_pid_is_reaped() {
+    bounded(async {
+        let fixture = fixture_path();
+        let (manager_sender, manager_receiver) = std_mpsc::sync_channel(1);
+        let (abort_sender, abort_receiver) = std_mpsc::sync_channel(1);
+        let owner = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            let manager = runtime.block_on(async {
+                let mut config =
+                    RuntimeManagerConfig::new(fixture, std::env::temp_dir().join("shutdown-hang"));
+                config.shutdown_timeout = Duration::from_secs(10);
+                let manager = RuntimeManager::new(config).unwrap();
+                let pid = manager.start_runtime().await.unwrap().pid.unwrap();
+                manager_sender.send((manager.clone(), pid)).unwrap();
+                manager
+            });
+            abort_receiver
+                .recv_timeout(CASE_DEADLINE)
+                .expect("external caller did not request actor abort");
+            drop(runtime);
+            drop(manager);
+        });
+        let (manager, pid) = manager_receiver
+            .recv_timeout(CASE_DEADLINE)
+            .expect("owner runtime did not publish the manager and PID");
+        let mut guard = ProcessGuard::new(pid);
+        let first_manager = manager.clone();
+        let first = tokio::spawn(async move { first_manager.stop_runtime().await });
+        wait_for_stderr(&manager, b"shutdown-received").await;
+        let second_manager = manager.clone();
+        let second = tokio::spawn(async move { second_manager.stop_runtime().await });
+        tokio::task::yield_now().await;
+
+        abort_sender.send(()).unwrap();
+        for waiter in [first, second] {
+            let error = waiter.await.unwrap().unwrap_err();
+            assert_eq!(error.kind, ManagerErrorKind::ManagerClosed);
+            assert!(
+                !process_exists(pid).await,
+                "stop waiter closed before PID {pid} was reaped"
+            );
+        }
+        tokio::task::spawn_blocking(move || owner.join().unwrap())
+            .await
+            .unwrap();
+        guard.disarm();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn actor_abort_holds_capability_observation_until_its_pid_is_reaped() {
+    bounded(async {
+        let fixture = fixture_path();
+        let (manager_sender, manager_receiver) = std_mpsc::sync_channel(1);
+        let (abort_sender, abort_receiver) = std_mpsc::sync_channel(1);
+        let owner = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            let manager = runtime.block_on(async {
+                let mut config = RuntimeManagerConfig::new(
+                    fixture,
+                    std::env::temp_dir().join("capability-hang"),
+                );
+                config.request_timeout = Duration::from_secs(10);
+                let manager = RuntimeManager::new(config).unwrap();
+                let pid = manager.start_runtime().await.unwrap().pid.unwrap();
+                manager_sender.send((manager.clone(), pid)).unwrap();
+                manager
+            });
+            abort_receiver
+                .recv_timeout(CASE_DEADLINE)
+                .expect("external caller did not request actor abort");
+            drop(runtime);
+            drop(manager);
+        });
+        let (manager, pid) = manager_receiver
+            .recv_timeout(CASE_DEADLINE)
+            .expect("owner runtime did not publish the manager and PID");
+        let mut guard = ProcessGuard::new(pid);
+        let capability_manager = manager.clone();
+        let observation = tokio::spawn(async move { capability_manager.get_capabilities().await });
+        wait_for_stderr(&manager, b"capability-held").await;
+
+        abort_sender.send(()).unwrap();
+        let observation = observation.await.unwrap().unwrap();
+        assert_eq!(observation.kind(), CapabilityObservationKind::Inconclusive);
+        assert_eq!(
+            observation.error().unwrap().kind,
+            ManagerErrorKind::ManagerClosed
+        );
+        assert!(
+            !process_exists(pid).await,
+            "capability observation completed before PID {pid} was reaped"
+        );
+        tokio::task::spawn_blocking(move || owner.join().unwrap())
+            .await
+            .unwrap();
+        guard.disarm();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn actor_abort_holds_a_queued_command_until_its_pid_is_reaped() {
+    bounded(async {
+        let fixture = fixture_path();
+        let (manager_sender, manager_receiver) = std_mpsc::sync_channel(1);
+        let (abort_sender, abort_receiver) = std_mpsc::sync_channel(1);
+        let owner = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let manager = runtime.block_on(async {
+                let mut config =
+                    RuntimeManagerConfig::new(fixture, std::env::temp_dir().join("shutdown-hang"));
+                config.command_queue_capacity = 1;
+                config.shutdown_timeout = Duration::from_secs(10);
+                let manager = RuntimeManager::new(config).unwrap();
+                let pid = manager.start_runtime().await.unwrap().pid.unwrap();
+                manager_sender.send((manager.clone(), pid)).unwrap();
+                manager
+            });
+            // The single-thread Runtime is deliberately not driven here, so a
+            // successfully sent command remains accepted in Actor::commands.
+            abort_receiver
+                .recv_timeout(CASE_DEADLINE)
+                .expect("external caller did not request actor abort");
+            drop(runtime);
+            drop(manager);
+        });
+        let (manager, pid) = manager_receiver
+            .recv_timeout(CASE_DEADLINE)
+            .expect("owner runtime did not publish the manager and PID");
+        let mut guard = ProcessGuard::new(pid);
+        let queued_manager = manager.clone();
+        let queued = tokio::spawn(async move { queued_manager.stop_runtime().await });
+        tokio::task::yield_now().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), manager.get_runtime_status())
+                .await
+                .is_err(),
+            "the first command did not occupy the one-slot Actor queue"
+        );
+
+        abort_sender.send(()).unwrap();
+        let error = queued.await.unwrap().unwrap_err();
+        assert_eq!(error.kind, ManagerErrorKind::ManagerClosed);
+        assert!(
+            !process_exists(pid).await,
+            "queued command closed before PID {pid} was reaped"
+        );
+        tokio::task::spawn_blocking(move || owner.join().unwrap())
+            .await
+            .unwrap();
+        guard.disarm();
+    })
+    .await;
+}
+
 async fn start_with_pid(
     manager: &RuntimeManager,
 ) -> (
