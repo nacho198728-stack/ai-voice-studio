@@ -1,8 +1,8 @@
 // VoiceEngine in-process plugin ABI v1.
-//
-// This header is the complete binary boundary between the isolated C++ Runtime
-// and a VoiceEngine plugin. Rust, Tauri, IPC messages, platform device handles,
-// C++ exceptions, and allocator ownership never cross it.
+// This is the complete C17/C++20 boundary between the isolated C++ Runtime and
+// a VoiceEngine module. Rust, Tauri, IPC, C++ objects/exceptions, platform
+// handles, allocator ownership, and non-fixed-width public scalar types do not
+// cross this header.
 
 #ifndef AIVS_RUNTIME_API_VOICE_ENGINE_H
 #define AIVS_RUNTIME_API_VOICE_ENGINE_H
@@ -31,19 +31,19 @@
 extern "C" {
 #endif
 
-/* Phase 0.5 requires IEEE-754 binary32 PCM. */
-#if FLT_RADIX != 2 || FLT_MANT_DIG != 24
+#if FLT_RADIX != 2 || FLT_MANT_DIG != 24 || FLT_MAX_EXP != 128 || FLT_MIN_EXP != -125
 #error "VoiceEngine ABI requires IEEE-754 binary32 float PCM"
 #endif
+#if defined(__cplusplus)
+static_assert(sizeof(float) == 4U, "VoiceEngine ABI requires four-byte float PCM");
+#else
+_Static_assert(sizeof(float) == 4U, "VoiceEngine ABI requires four-byte float PCM");
+#endif
 
-/*
- * All public extensible structures begin with struct_size and abi_version.
- * A caller initializes the complete known structure to zero, then uses the
- * supplied initializer macro or writes those two prefix fields. Implementers
- * accept a structure only when its prefix describes at least the fields they
- * read; future compatible versions append fields only. Every reserved field
- * must be zero on input and is returned as zero on output.
- */
+/* Every public extensible structure is append-only and starts with this logical
+ * prefix. Input reserved fields must be zero. Output reserved fields are zero.
+ * Nested structures must have the exact ABI version selected by the API table;
+ * their struct_size must cover every v1 field the callee reads. */
 
 typedef struct aivs_voice_engine_handle aivs_voice_engine_handle_t;
 
@@ -53,9 +53,13 @@ typedef uint32_t aivs_bool_t;
 
 typedef uint32_t aivs_pcm_format_t;
 #define AIVS_PCM_FORMAT_FLOAT32 UINT32_C(1)
-
 typedef uint32_t aivs_pcm_layout_t;
 #define AIVS_PCM_LAYOUT_INTERLEAVED UINT32_C(1)
+
+typedef uint32_t aivs_reset_reason_t;
+#define AIVS_RESET_REASON_CALLER_REQUEST UINT32_C(1)
+#define AIVS_RESET_REASON_DISCONTINUITY UINT32_C(2)
+#define AIVS_RESET_REASON_RECOVERY UINT32_C(3)
 
 typedef struct aivs_bytes_view {
   uint32_t struct_size;
@@ -103,12 +107,18 @@ typedef struct aivs_pcm_mutable_buffer {
   uint64_t reserved[2];
 } aivs_pcm_mutable_buffer_t;
 
+typedef struct aivs_voice_engine_factory_request {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t minimum_abi_version;
+  uint32_t maximum_abi_version;
+  uint64_t reserved[2];
+} aivs_voice_engine_factory_request_t;
+
 typedef struct aivs_initialize_request {
   uint32_t struct_size;
   uint32_t abi_version;
   aivs_bytes_view_t configuration_utf8;
-  uint32_t flags;
-  uint32_t reserved_u32;
   uint64_t reserved[2];
 } aivs_initialize_request_t;
 
@@ -124,9 +134,6 @@ typedef struct aivs_engine_info {
   uint32_t abi_version;
   aivs_mutable_bytes_buffer_t engine_name_utf8;
   aivs_mutable_bytes_buffer_t engine_version_utf8;
-  uint64_t feature_flags;
-  aivs_bool_t is_initialized;
-  uint32_t reserved_u32;
   uint64_t reserved[2];
 } aivs_engine_info_t;
 
@@ -135,8 +142,6 @@ typedef struct aivs_load_model_request {
   uint32_t abi_version;
   aivs_bytes_view_t model_id_utf8;
   aivs_bytes_view_t model_data;
-  uint32_t flags;
-  uint32_t reserved_u32;
   uint64_t reserved[2];
 } aivs_load_model_request_t;
 
@@ -152,12 +157,19 @@ typedef struct aivs_prepare_stream_request {
   uint64_t reserved[2];
 } aivs_prepare_stream_request_t;
 
+typedef struct aivs_prepare_stream_result {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint64_t algorithmic_latency_frames;
+  uint64_t stream_generation;
+  uint64_t reserved[2];
+} aivs_prepare_stream_result_t;
+
 typedef struct aivs_process_audio_request {
   uint32_t struct_size;
   uint32_t abi_version;
   aivs_pcm_buffer_t input;
-  uint32_t flags;
-  uint32_t reserved_u32;
+  uint64_t stream_generation;
   uint64_t reserved[2];
 } aivs_process_audio_request_t;
 
@@ -166,22 +178,28 @@ typedef struct aivs_process_audio_result {
   uint32_t abi_version;
   aivs_pcm_mutable_buffer_t output;
   uint64_t processed_frame_count;
+  uint64_t stream_generation;
   uint64_t reserved[2];
 } aivs_process_audio_result_t;
 
 typedef struct aivs_reset_request {
   uint32_t struct_size;
   uint32_t abi_version;
-  uint32_t flags;
+  aivs_reset_reason_t reason;
   uint32_t reserved_u32;
   uint64_t reserved[2];
 } aivs_reset_request_t;
 
+typedef struct aivs_reset_result {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint64_t stream_generation;
+  uint64_t reserved[2];
+} aivs_reset_result_t;
+
 typedef struct aivs_shutdown_request {
   uint32_t struct_size;
   uint32_t abi_version;
-  uint32_t flags;
-  uint32_t reserved_u32;
   uint64_t reserved[2];
 } aivs_shutdown_request_t;
 
@@ -202,27 +220,25 @@ typedef struct aivs_engine_metrics {
 } aivs_engine_metrics_t;
 
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_initialize_fn)(
-    const aivs_initialize_request_t* request,
-    aivs_initialize_result_t* result);
+    const aivs_initialize_request_t* request, aivs_initialize_result_t* result);
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_shutdown_fn)(
-    aivs_voice_engine_handle_t* engine,
-    const aivs_shutdown_request_t* request);
+    aivs_voice_engine_handle_t* engine, const aivs_shutdown_request_t* request);
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_get_engine_info_fn)(
-    aivs_voice_engine_handle_t* engine,
-    aivs_engine_info_t* info);
+    aivs_voice_engine_handle_t* engine, aivs_engine_info_t* info);
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_load_model_fn)(
-    aivs_voice_engine_handle_t* engine,
-    const aivs_load_model_request_t* request);
+    aivs_voice_engine_handle_t* engine, const aivs_load_model_request_t* request);
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_prepare_stream_fn)(
     aivs_voice_engine_handle_t* engine,
-    const aivs_prepare_stream_request_t* request);
+    const aivs_prepare_stream_request_t* request,
+    aivs_prepare_stream_result_t* result);
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_process_audio_fn)(
     aivs_voice_engine_handle_t* engine,
     const aivs_process_audio_request_t* request,
     aivs_process_audio_result_t* result);
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_reset_fn)(
     aivs_voice_engine_handle_t* engine,
-    const aivs_reset_request_t* request);
+    const aivs_reset_request_t* request,
+    aivs_reset_result_t* result);
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_get_metrics_fn)(
     aivs_voice_engine_handle_t* engine,
     const aivs_get_metrics_request_t* request,
@@ -242,6 +258,77 @@ typedef struct aivs_voice_engine_api {
   uint64_t reserved[4];
 } aivs_voice_engine_api_t;
 
+#define AIVS_VOICE_ENGINE_API_V1_SIZE ((uint32_t)sizeof(aivs_voice_engine_api_t))
+
+/* Header-only contract helpers: engines and runtimes must apply these exact
+ * selection/capacity rules; they do not load modules or process audio. */
+static inline aivs_error_code_t aivs_voice_engine_select_abi_version(
+    uint32_t caller_minimum,
+    uint32_t caller_maximum,
+    uint32_t plugin_minimum,
+    uint32_t plugin_maximum,
+    uint32_t* selected_version) {
+  uint32_t lower;
+  uint32_t upper;
+  if (selected_version == NULL) {
+    return AIVS_ERROR_INVALID_ARGUMENT;
+  }
+  *selected_version = 0U;
+  if (caller_minimum == 0U || plugin_minimum == 0U || caller_minimum > caller_maximum
+      || plugin_minimum > plugin_maximum) {
+    return AIVS_ERROR_INVALID_ARGUMENT;
+  }
+  lower = caller_minimum > plugin_minimum ? caller_minimum : plugin_minimum;
+  upper = caller_maximum < plugin_maximum ? caller_maximum : plugin_maximum;
+  if (lower > upper) {
+    return AIVS_ERROR_UNSUPPORTED_VOICE_ENGINE_ABI;
+  }
+  *selected_version = upper;
+  return AIVS_ERROR_SUCCESS;
+}
+
+static inline aivs_bool_t aivs_voice_engine_api_v1_capacity_is_sufficient(uint32_t capacity) {
+  return capacity >= AIVS_VOICE_ENGINE_API_V1_SIZE ? AIVS_TRUE : AIVS_FALSE;
+}
+
+static inline aivs_bool_t aivs_voice_engine_pcm_byte_count_is_addressable(
+    uint64_t frame_count, uint32_t channel_count, uint64_t* byte_count) {
+  uint64_t sample_count;
+  uint64_t bytes;
+  if (byte_count == NULL) {
+    return AIVS_FALSE;
+  }
+  *byte_count = 0U;
+  if (channel_count == 0U || frame_count > UINT64_MAX / channel_count) {
+    return AIVS_FALSE;
+  }
+  sample_count = frame_count * channel_count;
+  if (sample_count > UINT64_MAX / UINT64_C(4)) {
+    return AIVS_FALSE;
+  }
+  bytes = sample_count * UINT64_C(4);
+  if (UINTPTR_MAX < UINT64_MAX && bytes > (uint64_t)UINTPTR_MAX) {
+    return AIVS_FALSE;
+  }
+  *byte_count = bytes;
+  return AIVS_TRUE;
+}
+
+static inline aivs_bool_t aivs_voice_engine_api_v1_is_complete(
+    const aivs_voice_engine_api_t* api) {
+  if (api == NULL || api->struct_size != AIVS_VOICE_ENGINE_API_V1_SIZE
+      || api->abi_version != AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION) {
+    return AIVS_FALSE;
+  }
+  if (api->reserved[0] != 0U || api->reserved[1] != 0U || api->reserved[2] != 0U
+      || api->reserved[3] != 0U) {
+    return AIVS_FALSE;
+  }
+  return api->initialize != NULL && api->shutdown != NULL && api->get_engine_info != NULL
+      && api->load_model != NULL && api->prepare_stream != NULL && api->process_audio != NULL
+      && api->reset != NULL && api->get_metrics != NULL ? AIVS_TRUE : AIVS_FALSE;
+}
+
 #define AIVS_BYTES_VIEW_INIT \
   { sizeof(aivs_bytes_view_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_MUTABLE_BYTES_BUFFER_INIT \
@@ -249,32 +336,36 @@ typedef struct aivs_voice_engine_api {
 #define AIVS_PCM_BUFFER_INIT \
   { sizeof(aivs_pcm_buffer_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, 0U, 0U, AIVS_PCM_FORMAT_FLOAT32, AIVS_PCM_LAYOUT_INTERLEAVED, UINT64_C(0), UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_PCM_MUTABLE_BUFFER_INIT \
-  { sizeof(aivs_pcm_mutable_buffer_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, 0U, 0U, AIVS_PCM_FORMAT_FLOAT32, AIVS_PCM_LAYOUT_INTERLEAVED, UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_pcm_mutable_buffer_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, 0U, 0U, 0U, 0U, UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+#define AIVS_VOICE_ENGINE_FACTORY_REQUEST_INIT \
+  { sizeof(aivs_voice_engine_factory_request_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_VOICE_ENGINE_ABI_MINIMUM_COMPATIBLE_VERSION, AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_INITIALIZE_REQUEST_INIT \
-  { sizeof(aivs_initialize_request_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_BYTES_VIEW_INIT, 0U, 0U, {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_initialize_request_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_BYTES_VIEW_INIT, {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_INITIALIZE_RESULT_INIT \
   { sizeof(aivs_initialize_result_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_ENGINE_INFO_INIT \
-  { sizeof(aivs_engine_info_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_MUTABLE_BYTES_BUFFER_INIT, AIVS_MUTABLE_BYTES_BUFFER_INIT, UINT64_C(0), AIVS_FALSE, 0U, {UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_engine_info_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_MUTABLE_BYTES_BUFFER_INIT, AIVS_MUTABLE_BYTES_BUFFER_INIT, {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_PREPARE_STREAM_REQUEST_INIT \
   { sizeof(aivs_prepare_stream_request_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, 0U, 0U, AIVS_PCM_FORMAT_FLOAT32, AIVS_PCM_LAYOUT_INTERLEAVED, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+#define AIVS_PREPARE_STREAM_RESULT_INIT \
+  { sizeof(aivs_prepare_stream_result_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
 #define AIVS_PROCESS_AUDIO_RESULT_INIT \
-  { sizeof(aivs_process_audio_result_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_PCM_MUTABLE_BUFFER_INIT, UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
-#define AIVS_VOICE_ENGINE_API_INIT \
-  { sizeof(aivs_voice_engine_api_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, {UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(0)} }
+  { sizeof(aivs_process_audio_result_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, AIVS_PCM_MUTABLE_BUFFER_INIT, UINT64_C(0), UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+#define AIVS_RESET_RESULT_INIT \
+  { sizeof(aivs_reset_result_t), AIVS_VOICE_ENGINE_ABI_CURRENT_VERSION, UINT64_C(0), {UINT64_C(0), UINT64_C(0)} }
+#define AIVS_VOICE_ENGINE_API_OUTPUT_INIT \
+  { AIVS_VOICE_ENGINE_API_V1_SIZE, 0U, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, {UINT64_C(0), UINT64_C(0), UINT64_C(0), UINT64_C(0)} }
 
-/*
- * The only plugin export is aivs_voice_engine_get_api. A runtime calls it with
- * its supported ABI version and an initialized output table. A plugin returns
- * AIVS_ERROR_UNSUPPORTED_VOICE_ENGINE_ABI for an incompatible version and
- * otherwise fills only fields covered by out_api->struct_size.
- */
+/* Exactly one plugin export. request gives the caller's inclusive ABI range.
+ * On success out_api describes the highest common ABI and a complete table.
+ * out_api->struct_size is caller capacity on entry and exact table size on
+ * return; out_api->abi_version is zero on entry and selected on success. */
 typedef aivs_error_code_t(AIVS_VOICE_ENGINE_CALL* aivs_voice_engine_get_api_fn)(
-    uint32_t requested_abi_version,
+    const aivs_voice_engine_factory_request_t* request,
     aivs_voice_engine_api_t* out_api);
 
 AIVS_VOICE_ENGINE_API aivs_error_code_t AIVS_VOICE_ENGINE_CALL aivs_voice_engine_get_api(
-    uint32_t requested_abi_version,
+    const aivs_voice_engine_factory_request_t* request,
     aivs_voice_engine_api_t* out_api);
 
 #if defined(__cplusplus)

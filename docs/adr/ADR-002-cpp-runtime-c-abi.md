@@ -1,5 +1,8 @@
 # ADR-002: C++ Runtime to VoiceEngine C ABI
 
+- Status: Accepted
+- Date: 2026-08-19
+
 ## Context
 
 VoiceEngine implementations may evolve independently from the desktop control
@@ -25,6 +28,17 @@ The canonical contract generator owns the ABI version and the fixed-width
 error-code mapping for Rust, C++, and C. The engine range adds only
 `InvalidArgument` (1301), `InvalidState` (1302), and `BufferTooSmall` (1303);
 existing values remain unchanged.
+
+## Rationale
+
+Keeping engines behind the isolated C++ Runtime contains native model faults
+outside the Tauri/Rust control plane. A language-neutral, append-only C ABI
+lets independently compiled modules negotiate a stable version without sharing
+a C++ standard-library or allocator ABI. Caller-owned buffers and fixed-width
+results make ownership explicit, while the prepare/process contract preserves
+the realtime path's no-allocation/no-blocking boundary. These choices carry the
+same monorepo principles in ADR-000—reviewable shared contracts with explicit
+module boundaries—into the Runtime-to-engine boundary.
 
 ## Consequences
 

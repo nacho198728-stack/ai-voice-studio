@@ -83,3 +83,41 @@ Engine, IPC, Rust FFI, Tauri integration, device access, or model execution.
 - Native ABI checks ran on macOS arm64 only. The header uses Windows export and
   calling-convention branches, but an actual Windows compiler/runner remains a
   Task 18 CI acceptance gate.
+
+## Review fix round 1
+
+- Added an explicit inclusive factory request range and deterministic
+  highest-overlap selection rule. The table now has separate entry capacity
+  (`struct_size`), exact success shape (`AIVS_VOICE_ENGINE_API_V1_SIZE`), an
+  explicit selected ABI version, zero reserved fields, and eight required
+  non-null pointers. Header-only contract helpers let C tests cover too-small
+  and larger capacity, no overlap, and a complete in-test v1 function table
+  without implementing or loading a plugin.
+- Added caller-owned `aivs_prepare_stream_result_t` (exact algorithmic latency
+  in output frames plus stream generation) and `aivs_reset_result_t`; reset now
+  takes a closed set of explicit reasons and returns incremented generation.
+  Undefined v1 flags and feature flags were removed.
+- Expanded the focused ABI document with all-or-nothing failure states,
+  multi-buffer info capacity semantics, failed-shutdown retry ownership,
+  pointer/zero-frame/no-retention/overflow/overlap PCM rules, deterministic
+  error precedence, factory/initialize serialization, independent-handle
+  concurrency, and module/table lifetime requirements.
+- Added the shared 64-bit v1 layout manifest, compiled by both real C17 and
+  C++20 contract executables. It freezes size, alignment, and every field
+  offset for all public structures and all eight table slots; language-specific
+  assertions freeze every function pointer type. Float checks now cover storage
+  size, radix, precision, and exponent range in the header and both tests.
+- ADR-002 now carries Accepted status/date and a rationale aligned with
+  ADR-000's isolation, shared-contract, and explicit-boundary principles.
+
+### Review-fix RED/GREEN evidence
+
+- RED: the shared layout manifest and C/C++ tests were added before the new
+  factory/prepare/reset ABI definitions. Debug build failed as expected with
+  missing `aivs_voice_engine_factory_request_t`,
+  `aivs_prepare_stream_result_t`, and `aivs_reset_result_t`, alongside layout
+  drift for the removed speculative fields.
+- GREEN: after the minimal ABI/header changes, both public-header executables
+  compile and run. They validate exact 64-bit layout, factory range/capacity
+  behavior, complete/non-complete stub tables, and zero/maximum/overflow PCM
+  byte arithmetic without introducing an engine implementation.
