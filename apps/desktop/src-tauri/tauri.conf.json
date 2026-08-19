@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AI Voice Studio",
+  "version": "0.0.0",
+  "identifier": "studio.aivoice.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
+      "capabilities": ["main"]
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "AI Voice Studio",
+        "width": 920,
+        "height": 680,
+        "minWidth": 360,
+        "minHeight": 560,
+        "resizable": true,
+        "devtools": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.png"],
+    "externalBin": ["binaries/voice-runtime"],
+    "resources": {
+      "resources/native/": "native/",
+      "resources/config/": "config/"
+    }
+  }
+}

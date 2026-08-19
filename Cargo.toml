@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "apps/desktop/src-tauri",
   "apps/runtime-host",
   "core/capability",
   "core/config",

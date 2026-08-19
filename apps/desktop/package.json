@@ -1,5 +1,27 @@
 {
   "name": "@ai-voice-studio/desktop",
   "private": true,
-  "version": "0.0.0"
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "lint": "eslint . --max-warnings 0",
+    "tauri": "tauri",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@tauri-apps/cli": "2.11.4",
+    "eslint": "10.8.1",
+    "jsdom": "30.0.1",
+    "typescript": "5.9.2",
+    "typescript-eslint": "8.67.0",
+    "vite": "8.2.1",
+    "vitest": "4.1.11"
+  }
 }
