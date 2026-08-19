@@ -49,7 +49,11 @@ user workflow was introduced. ADR-003 was not created.
   prevented and schedules one bounded cleanup future; duplicates remain
   prevented without starting another cleanup; success, failure, or the outer
   three-second deadline authorizes `AppHandle::exit`. The final request passes
-  through, with RuntimeManager drop remaining the timeout fallback.
+  through, with RuntimeManager drop remaining the timeout fallback. If a UI
+  Stop is already pending, RuntimeManager joins the exit cleanup to the same
+  bounded `StopContext`: one native Shutdown is sent, every waiter receives the
+  same result only after reap, and overflow receives an explicit capacity
+  error derived from the configured command-queue bound.
 
 ## Native staging and packaging
 
@@ -139,6 +143,18 @@ user workflow was introduced. ADR-003 was not created.
   authorizes final exit only after cleanup, and still authorizes final exit when
   cleanup returns an error or the outer deadline expires. Result: 3
   exit-coordinator tests.
+- Round-2 lifecycle RED reproduced the remaining Stop/close race at both
+  boundaries: a second `RuntimeManager::stop_runtime` returned `InvalidState`
+  while the controlled child was still delaying shutdown, and the composed
+  desktop exit cleanup therefore authorized final exit before the UI Stop or
+  reap completed. GREEN changes `StopContext` to hold a bounded waiter set,
+  joins Stop calls during `Stopping`, fans one stopped/error result to every
+  waiter after reap, returns a capacity error at the command-queue-derived
+  limit, and closes all waiters on actor drop/abort. Controlled-child tests
+  cover successful delayed reap, remote shutdown failure, timeout, one native
+  Shutdown, the waiter bound, and no orphan. A desktop composition test proves
+  a pending UI Stop followed by exit cleanup delays final exit until that same
+  reap and still observes one native Shutdown.
 
 ## Verification
 
@@ -149,7 +165,8 @@ user workflow was introduced. ADR-003 was not created.
   warnings.
 - `cargo check --workspace --all-targets` — passed.
 - `cargo test --workspace` — passed. Desktop adapter 6/6, Tauri IPC 1/1, and
-  exit coordination 3/3;
+  exit coordination 3/3; RuntimeHost unit tests 16/16 include bounded Stop
+  fan-out and actor-drop completion;
   the explicit staged-native test remains intentionally ignored by the generic
   workspace invocation and is run separately below. Existing workspace unit,
   integration, and compile-fail doctests passed; CTest-owned native-path cases
@@ -158,8 +175,10 @@ user workflow was introduced. ADR-003 was not created.
   real Tauri invoke -> managed RuntimeControlPlane -> RuntimeManager -> IPC ->
   C++ Runtime -> C ABI -> Mock integration was 1/1 and produced both owned Rust
   and C++ lifecycle logs before reap.
-- Fresh Debug configure/build/CTest — passed 18/18.
-- Fresh Release configure/build/CTest — passed 18/18.
+- Fresh Debug configure/build/CTest — passed 19/19, including the controlled
+  RuntimeManager Stop-join cases and desktop Stop/exit race.
+- Fresh Release configure/build/CTest — passed 19/19 with the same lifecycle
+  coverage.
 - `pnpm contracts:check` — passed without generated drift.
 - Root `pnpm test` — passed: contracts 6/6, doctor 7/7, staging 3/3, bundle 2/2,
   frontend 8/8.
@@ -182,8 +201,14 @@ user workflow was introduced. ADR-003 was not created.
   automated focus coverage is 8/8, origin denial is the pure adversarial policy
   plus guarded-builder test because Tauri's mock runtime does not execute its
   stored navigation callback, and an unlocked fresh GUI rerun remains required.
+- Round 2 did not repeat the blocked GUI attempt because the macOS session
+  remained locked and the lifecycle change is below the rendered UI. Fresh
+  production evidence instead comes from the delayed-child desktop composition
+  race test in both Debug and Release CTest; this is not claimed as a visual or
+  accessibility GUI run.
 - Final `git diff --check` and format check — passed. Process scan after GUI and
-  integration shutdown found no residual `voice-runtime` child.
+  integration shutdown found no residual `voice-runtime`, controlled fixture,
+  or `ai-voice-studio` process.
 
 ## Files
 
@@ -194,7 +219,10 @@ user workflow was introduced. ADR-003 was not created.
   focused tests.
 - Tauri adapter: `apps/desktop/src-tauri/Cargo.toml`, `build.rs`,
   `tauri.conf.json`, `capabilities/main.json`, `src/lib.rs`, `src/main.rs`, and
-  `tests/{adapter,command_ipc,exit_coordinator,native_command_service}.rs`.
+  `tests/{adapter,command_ipc,exit_coordinator,exit_runtime_race,native_command_service}.rs`.
+- Runtime lifecycle regression: `apps/runtime-host/src/manager.rs`,
+  `apps/runtime-host/tests/runtime_manager_fixture.rs`,
+  `tests/fixtures/runtime_manager_child_fixture.cpp`, and `tests/CMakeLists.txt`.
 - Staging/bundle evidence: `tools/scripts/stage-desktop-native.mjs` and its test;
   `tools/scripts/verify-desktop-bundle.mjs` and its test.
 - Decision: `docs/adr/ADR-001-tauri-rust-control-plane.md`.

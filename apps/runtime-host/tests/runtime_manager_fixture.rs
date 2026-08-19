@@ -113,6 +113,93 @@ async fn immediate_shutdown_response_and_exit_is_ordered_reliably() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires CTest-provided controlled child fixture"]
+async fn concurrent_stops_join_one_shutdown_and_both_complete_after_reap() {
+    let manager = manager("shutdown-delay");
+    let pid = manager.start_runtime().await.unwrap().pid.unwrap();
+    let first_manager = manager.clone();
+    let first = tokio::spawn(async move { first_manager.stop_runtime().await });
+    wait_for_stderr(&manager, b"shutdown-received").await;
+
+    let second_manager = manager.clone();
+    let second = tokio::spawn(async move { second_manager.stop_runtime().await });
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(
+        !first.is_finished(),
+        "first Stop completed before process reap"
+    );
+    assert!(
+        !second.is_finished(),
+        "second Stop did not join the in-progress reap"
+    );
+
+    let first_status = first.await.unwrap().unwrap();
+    let second_status = second.await.unwrap().unwrap();
+    assert_eq!(first_status, second_status);
+    assert_eq!(first_status.state, RuntimeState::Stopped);
+    assert_eq!(first_status.pid, None);
+    assert_pid_gone(pid).await;
+    let status = manager.get_runtime_status().await.unwrap();
+    assert_eq!(occurrences(&status.stderr_tail, b"shutdown-received"), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn concurrent_stop_failure_and_timeout_complete_both_waiters_after_reap() {
+    for (mode, expected) in [
+        ("shutdown-error", ManagerErrorKind::Remote),
+        ("shutdown-hang", ManagerErrorKind::Timeout),
+    ] {
+        let mut config = config(mode);
+        if mode == "shutdown-hang" {
+            config.shutdown_timeout = Duration::from_millis(75);
+        }
+        let manager = RuntimeManager::new(config).unwrap();
+        let pid = manager.start_runtime().await.unwrap().pid.unwrap();
+        let first_manager = manager.clone();
+        let first = tokio::spawn(async move { first_manager.stop_runtime().await });
+        wait_for_stderr(&manager, b"shutdown-received").await;
+        let second_manager = manager.clone();
+        let second = tokio::spawn(async move { second_manager.stop_runtime().await });
+
+        let first_error = first.await.unwrap().unwrap_err();
+        let second_error = second.await.unwrap().unwrap_err();
+        assert_eq!(first_error, second_error, "mode {mode}");
+        assert_eq!(first_error.kind, expected, "mode {mode}");
+        assert_pid_gone(pid).await;
+        let status = manager.get_runtime_status().await.unwrap();
+        assert_eq!(status.pid, None, "mode {mode}");
+        assert_eq!(occurrences(&status.stderr_tail, b"shutdown-received"), 1);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTest-provided controlled child fixture"]
+async fn concurrent_stop_waiters_have_a_command_queue_derived_bound() {
+    let mut config = config("shutdown-delay");
+    config.command_queue_capacity = 1;
+    let manager = RuntimeManager::new(config).unwrap();
+    manager.start_runtime().await.unwrap();
+    let first_manager = manager.clone();
+    let first = tokio::spawn(async move { first_manager.stop_runtime().await });
+    wait_for_stderr(&manager, b"shutdown-received").await;
+
+    let second_manager = manager.clone();
+    let second = tokio::spawn(async move { second_manager.stop_runtime().await });
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let overflow = tokio::time::timeout(Duration::from_millis(50), manager.stop_runtime())
+        .await
+        .expect("overflow Stop must receive an immediate bounded error")
+        .unwrap_err();
+    assert_eq!(overflow.kind, ManagerErrorKind::Capacity);
+
+    assert_eq!(
+        first.await.unwrap().unwrap(),
+        second.await.unwrap().unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTest-provided controlled child fixture"]
 async fn stdout_close_then_hang_cannot_override_short_handshake_deadline() {
     let mut config = config("stdout-close-hang");
     config.handshake_timeout = Duration::from_millis(100);
@@ -406,6 +493,13 @@ async fn wait_for_stderr(manager: &RuntimeManager, expected: &[u8]) {
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
     panic!("fixture did not confirm held Ping");
+}
+
+fn occurrences(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
 }
 
 async fn assert_pid_gone(pid: u32) {

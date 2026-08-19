@@ -76,6 +76,14 @@ Runtime shutdown/reap on Tauri's async runtime. Repeated requests remain
 prevented while cleanup is active. Completion, failure, or the adapter's outer
 cleanup deadline authorizes one final `AppHandle::exit`, which is not prevented;
 RuntimeHost's kill-on-drop behavior is the final orphan-prevention fallback.
+RuntimeHost treats Stop as an idempotent join while a shutdown is already in
+progress: one native Shutdown request owns a bounded `StopContext`, subsequent
+Stop callers join its command-queue-derived waiter set, and every joined caller
+receives the same result only after the child has been reaped. Normal shutdown,
+remote/process failure, timeout, manager drop, and actor abort all drain or drop
+the complete waiter set; exceeding the bound returns an explicit capacity
+error. This lets a close request join a UI Stop already in flight instead of
+advancing final application exit early or sending a second native Shutdown.
 
 The frontend owns presentation state only. It retains stable action nodes,
 disables conflicting actions while a command is pending, renders the six manager

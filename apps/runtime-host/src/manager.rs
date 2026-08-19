@@ -1308,7 +1308,46 @@ struct StopContext {
     deadline: Instant,
     response_received: bool,
     stdout_eof: bool,
-    reply: oneshot::Sender<Result<RuntimeStatus, ManagerError>>,
+    maximum_waiters: usize,
+    waiters: Vec<StatusReply>,
+}
+
+impl StopContext {
+    fn new(request_id: u64, deadline: Instant, maximum_waiters: usize, reply: StatusReply) -> Self {
+        let mut waiters = Vec::with_capacity(maximum_waiters);
+        waiters.push(reply);
+        Self {
+            request_id,
+            deadline,
+            response_received: false,
+            stdout_eof: false,
+            maximum_waiters,
+            waiters,
+        }
+    }
+
+    fn join(&mut self, reply: StatusReply) -> Result<(), StatusReply> {
+        if self.waiters.len() >= self.maximum_waiters {
+            return Err(reply);
+        }
+        self.waiters.push(reply);
+        Ok(())
+    }
+
+    fn complete(mut self, result: Result<RuntimeStatus, ManagerError>) {
+        for waiter in self.waiters.drain(..) {
+            let _ = waiter.send(result.clone());
+        }
+    }
+}
+
+impl Drop for StopContext {
+    fn drop(&mut self) {
+        let error = ManagerError::closed();
+        for waiter in self.waiters.drain(..) {
+            let _ = waiter.send(Err(error.clone()));
+        }
+    }
 }
 
 struct Actor {
@@ -1485,9 +1524,21 @@ impl Actor {
                 return;
             }
             RuntimeState::Stopping => {
-                let _ = reply.send(Err(ManagerError::invalid_state(
-                    "Runtime shutdown is already in progress",
-                )));
+                let Some(stop) = self.stop.as_mut() else {
+                    let _ = reply.send(Err(ManagerError::new(
+                        ErrorCode::InternalError,
+                        ManagerErrorKind::InvalidState,
+                        "Runtime shutdown state has no active completion context",
+                    )));
+                    return;
+                };
+                if let Err(reply) = stop.join(reply) {
+                    let _ = reply.send(Err(ManagerError::new(
+                        ErrorCode::RuntimeShuttingDown,
+                        ManagerErrorKind::Capacity,
+                        "maximum concurrent Runtime shutdown waiters reached",
+                    )));
+                }
                 return;
             }
             RuntimeState::Connected => {}
@@ -1538,13 +1589,12 @@ impl Actor {
                 return;
             }
         };
-        self.stop = Some(StopContext {
+        self.stop = Some(StopContext::new(
             request_id,
-            deadline: Instant::now() + self.config.shutdown_timeout,
-            response_received: false,
-            stdout_eof: false,
+            Instant::now() + self.config.shutdown_timeout,
+            self.config.command_queue_capacity.saturating_add(1),
             reply,
-        });
+        ));
         telemetry(
             TelemetryLevel::Info,
             "Runtime shutdown requested",
@@ -1974,7 +2024,7 @@ impl Actor {
         self.pending.fail_all(ManagerError::unavailable(
             "Runtime stopped before request completion",
         ));
-        let _ = stop.reply.send(Ok(self.status().await));
+        stop.complete(Ok(self.status().await));
     }
 
     async fn fail_stream(&mut self, error: ManagerError, reason: RuntimeExitReason) {
@@ -2013,7 +2063,7 @@ impl Actor {
             let _ = start.reply.send(Err(error.clone()));
         }
         if let Some(stop) = stop {
-            let _ = stop.reply.send(Err(error.clone()));
+            stop.complete(Err(error.clone()));
         }
         if let Some(stop) = extra_stop {
             let _ = stop.send(Err(error));
@@ -2039,7 +2089,7 @@ impl Actor {
             let _ = start.reply.send(Err(error.clone()));
         }
         if let Some(stop) = stop {
-            let _ = stop.reply.send(Err(error));
+            stop.complete(Err(error));
         }
     }
 
@@ -2146,7 +2196,7 @@ impl Actor {
             let _ = start.reply.send(Err(error.clone()));
         }
         if let Some(stop) = stop {
-            let _ = stop.reply.send(Err(error));
+            stop.complete(Err(error));
         }
     }
 }
@@ -2383,6 +2433,58 @@ mod tests {
                 generation,
                 NativeRuntimeCapabilities::from_canonical_json(UNAVAILABLE_NATIVE).unwrap(),
             ),
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_context_bounds_waiters_and_fans_out_one_completion() {
+        let (first_tx, first_rx) = oneshot::channel();
+        let (second_tx, second_rx) = oneshot::channel();
+        let (overflow_tx, overflow_rx) = oneshot::channel();
+        let mut stop = StopContext::new(7, Instant::now() + Duration::from_secs(1), 2, first_tx);
+        assert!(stop.join(second_tx).is_ok());
+        let overflow_tx = stop.join(overflow_tx).unwrap_err();
+        let capacity = ManagerError::new(
+            ErrorCode::RuntimeShuttingDown,
+            ManagerErrorKind::Capacity,
+            "controlled capacity",
+        );
+        overflow_tx.send(Err(capacity.clone())).unwrap();
+
+        let expected = RuntimeStatus {
+            state: RuntimeState::Stopped,
+            generation: 7,
+            pid: None,
+            hello: None,
+            last_exit: None,
+            last_error: None,
+            stderr_tail: Vec::new(),
+            restart_policy: RestartPolicyStatus {
+                automatic_restart: false,
+                max_attempts: 0,
+                attempts_observed: 0,
+            },
+        };
+        stop.complete(Ok(expected.clone()));
+
+        assert_eq!(first_rx.await.unwrap().unwrap(), expected);
+        assert_eq!(second_rx.await.unwrap().unwrap(), expected);
+        assert_eq!(overflow_rx.await.unwrap().unwrap_err(), capacity);
+    }
+
+    #[tokio::test]
+    async fn dropping_stop_context_completes_every_waiter_as_manager_closed() {
+        let (first_tx, first_rx) = oneshot::channel();
+        let (second_tx, second_rx) = oneshot::channel();
+        let mut stop = StopContext::new(9, Instant::now() + Duration::from_secs(1), 2, first_tx);
+        stop.join(second_tx).unwrap();
+        drop(stop);
+
+        for reply in [first_rx, second_rx] {
+            assert_eq!(
+                reply.await.unwrap().unwrap_err().kind,
+                ManagerErrorKind::ManagerClosed
+            );
         }
     }
 

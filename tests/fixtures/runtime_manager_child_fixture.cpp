@@ -328,7 +328,21 @@ int run_loop(std::string_view mode) {
         continue;
       }
       if (request.command == message::Command::Shutdown) {
+        if (mode == "shutdown-delay" || mode == "shutdown-error" ||
+            mode == "shutdown-hang") {
+          std::fputs("shutdown-received\n", stderr);
+          std::fflush(stderr);
+        }
         if (mode == "shutdown-hang") {
+          hang();
+        }
+        if (mode == "shutdown-delay" || mode == "shutdown-error") {
+          std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        }
+        if (mode == "shutdown-error") {
+          if (!send(error_response(request, ErrorCode::EngineUnavailable))) {
+            return 3;
+          }
           hang();
         }
         if (held_ping.has_value() && mode == "full-pending" &&
