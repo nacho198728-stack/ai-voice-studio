@@ -25,10 +25,11 @@ hardware inspection, model behavior, and user features were not modified.
 - Load-from-bytes and load-from-path are read-only. Typed errors distinguish
   I/O, invalid document, unsupported schema, and semantic failures. There is no
   repair, mutation, implicit default, path search, or fallback.
-- `ai-voice-capability` owns stable platform, architecture, Runtime, Engine,
-  manager, and CapabilityProfile types. It reports only canonical
-  Runtime/protocol versions, `mock|unavailable`, Mock identity/availability,
-  manager health/generation, and platform/architecture.
+- `ai-voice-capability` owns only generation-free platform, architecture,
+  backend, Mock identity/availability, and validated native payload types. It
+  exposes no manager-generation or profile-construction API. RuntimeHost owns
+  the generation-bearing manager, Runtime, Engine, and `CapabilityProfile`
+  output types and their private construction path.
 - Query state is explicitly `not_evaluated`, `inconclusive`, or `observed`.
   Engine availability therefore distinguishes `available`, `unavailable`,
   `unknown`, and `not_evaluated`; `unknown` is emitted only for an inconclusive
@@ -117,6 +118,13 @@ hardware inspection, model behavior, and user features were not modified.
   restart coverage proving old successful and old failed observations are both
   stale. Two adversarial compile-fail tests prove rebinding is unavailable to
   external callers.
+- Final-review RED recorded the remaining lower-level bypass: public
+  `CapabilityEvaluation`, `ManagerCapability::new`, and
+  `CapabilityProfile::from_evaluation` successfully assembled copied native
+  data with an arbitrary current generation. GREEN removes that entire public
+  construction chain, moves the generation-bearing profile and private truth
+  table into RuntimeHost, and leaves the shared capability crate generation-
+  free. A third adversarial compile-fail test covers the exact former bypass.
 
 ## Verification
 
@@ -124,8 +132,8 @@ hardware inspection, model behavior, and user features were not modified.
 - `cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings` —
   passed without warnings.
 - `cargo +1.97.1 check --locked --workspace` — passed.
-- `cargo +1.97.1 test --locked --workspace` — passed: 34 unit/integration tests
-  plus three compile-fail doctests executed, 0 failed; 19 native-path/
+- `cargo +1.97.1 test --locked --workspace` — passed: 33 unit/integration tests
+  plus four compile-fail doctests executed, 0 failed; 19 native-path/
   controlled-child cases remained CTest-owned.
 - Checked-in default config path load and full malformed/boundary matrix —
   passed; the loader test's exact bytes before and after loading were identical,
@@ -144,6 +152,7 @@ hardware inspection, model behavior, and user features were not modified.
 - `7d79170` — `feat(core): add config and capability contracts`
 - `b57189b` — `fix(core): enforce capability observation invariants`
 - `27db08f` — `fix(runtime): seal capability observation provenance`
+- `45902b2` — `fix(runtime): make capability profiles actor-authorized`
 
 ## Self-review
 
@@ -159,9 +168,10 @@ hardware inspection, model behavior, and user features were not modified.
   no CPU/GPU/RAM/NPU/audio/device/driver/benchmark/machine fields.
 - Public composite configuration/native/profile types cannot be directly
   deserialized or field-mutated into an invalid state. Public capability output
-  is Serialize-only. RuntimeHost's opaque observation has no public constructor;
-  generation provenance is checked before an actor-authorized outcome can be
-  projected into a profile.
+  is Serialize-only. RuntimeHost's opaque observation has no public constructor,
+  and its generation-bearing profile has no public constructor or public lower-
+  level assembly function. Generation provenance is checked before an actor-
+  authorized outcome can be projected into a profile.
 - Dependencies remain pinned to existing workspace Serde versions; the lockfile
   adds only the two local crates and their already-locked dependencies.
 
