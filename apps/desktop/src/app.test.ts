@@ -79,13 +79,46 @@ describe("desktop shell", () => {
     mountDesktop(document.body, api({ startRuntime: vi.fn(() => start) }));
     await flush();
 
-    button("Start Runtime").click();
+    const startButton = button("Start Runtime");
+    const refreshButton = button("Refresh Status");
+    startButton.focus();
+    startButton.click();
     expect(Array.from(document.querySelectorAll("button")).every((item) => item.disabled)).toBe(true);
     expect(button("Starting…").getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(document.querySelector(".status-card"));
 
     resolveStart?.({ ...stopped, state: "connected", generation: 1 });
     await flush();
     expect(button("Stop Runtime").disabled).toBe(false);
+    expect(document.querySelector('[data-state="connected"]')).not.toBeNull();
+    expect(document.activeElement).toBe(refreshButton);
+    expect(startButton.textContent).toBe("Start Runtime");
+  });
+
+  it("keeps keyboard focus on refresh across pending and status updates", async () => {
+    let resolveRefresh: ((value: RuntimeStatusDto) => void) | undefined;
+    const refresh = new Promise<RuntimeStatusDto>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const getRuntimeStatus = vi
+      .fn<() => Promise<RuntimeStatusDto>>()
+      .mockResolvedValueOnce(stopped)
+      .mockImplementationOnce(() => refresh);
+    mountDesktop(document.body, api({ getRuntimeStatus }));
+    await flush();
+
+    const refreshButton = button("Refresh Status");
+    refreshButton.focus();
+    refreshButton.click();
+    expect(document.activeElement).toBe(document.querySelector(".status-card"));
+    expect(refreshButton.textContent).toBe("Refreshing…");
+    expect(refreshButton.disabled).toBe(true);
+
+    resolveRefresh?.({ ...stopped, state: "connected", generation: 1 });
+    await flush();
+    expect(document.activeElement).toBe(refreshButton);
+    expect(refreshButton.textContent).toBe("Refresh Status");
+    expect(refreshButton.disabled).toBe(false);
     expect(document.querySelector('[data-state="connected"]')).not.toBeNull();
   });
 
@@ -100,12 +133,15 @@ describe("desktop shell", () => {
     );
     await flush();
 
-    button("Start Runtime").click();
+    const startButton = button("Start Runtime");
+    startButton.focus();
+    startButton.click();
     await flush();
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "Build native artifacts, then retry.",
     );
     expect(button("Start Runtime").disabled).toBe(false);
+    expect(document.activeElement).toBe(startButton);
   });
 
   it("keeps lifecycle updates accessible and bounds hostile error text", async () => {

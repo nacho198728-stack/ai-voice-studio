@@ -17,6 +17,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "AI Voice Studio",
         "width": 920,
         "height": 680,

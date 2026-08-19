@@ -5,7 +5,8 @@ use ai_voice_config::ProductConfig;
 use ai_voice_contracts::ErrorCode;
 use ai_voice_desktop::{
     ArtifactLayout, CapabilityDto, CommandService, ControlPlane, ControlPlaneFuture, DesktopError,
-    MockPipelineSummaryDto, NativeArtifactPaths, RuntimeStatusDto, build_manager_config,
+    MockPipelineSummaryDto, NativeArtifactPaths, NavigationPolicy, RuntimeStatusDto,
+    build_manager_config,
 };
 use ai_voice_runtime_host::{
     ManagerError, ManagerErrorKind, RestartPolicyStatus, RuntimeState, RuntimeStatus,
@@ -198,6 +199,45 @@ fn artifact_layout_is_deterministic_for_unicode_macos_and_windows_paths() {
             ),
             config: PathBuf::from(r"C:\Program Files\AI 声音\resources\config\config.json"),
         }
+    );
+}
+
+#[test]
+fn navigation_policy_allows_only_the_exact_packaged_or_configured_development_origin() {
+    let macos = NavigationPolicy::production(false);
+    assert!(macos.allows(&"tauri://localhost/".parse().unwrap()));
+    assert!(macos.allows(&"tauri://localhost/status?fresh=1#runtime".parse().unwrap()));
+    assert!(!macos.allows(&"http://tauri.localhost/".parse().unwrap()));
+
+    let windows = NavigationPolicy::production(true);
+    assert!(windows.allows(&"http://tauri.localhost/".parse().unwrap()));
+    assert!(!windows.allows(&"https://tauri.localhost/".parse().unwrap()));
+    assert!(!windows.allows(&"http://tauri.localhost.evil.example/".parse().unwrap()));
+
+    let development = NavigationPolicy::development();
+    assert!(development.allows(&"http://127.0.0.1:1420/".parse().unwrap()));
+    assert!(development.allows(&"http://127.0.0.1:1420/src/main.ts".parse().unwrap()));
+    for denied in [
+        "http://localhost:1420/",
+        "http://127.0.0.1:1421/",
+        "http://127.0.0.1.evil.example:1420/",
+        "http://user@127.0.0.1:1420/",
+        "https://example.com/",
+        "file:///tmp/index.html",
+        "data:text/html,hostile",
+        "javascript:alert(1)",
+    ] {
+        assert!(!development.allows(&denied.parse().unwrap()), "{denied}");
+    }
+
+    assert!(
+        NavigationPolicy::for_mode(true, false).allows(&"http://127.0.0.1:1420/".parse().unwrap())
+    );
+    assert!(
+        NavigationPolicy::for_mode(false, false).allows(&"tauri://localhost/".parse().unwrap())
+    );
+    assert!(
+        NavigationPolicy::for_mode(false, true).allows(&"http://tauri.localhost/".parse().unwrap())
     );
 }
 

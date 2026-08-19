@@ -1,8 +1,9 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use ai_voice_capability::{
     Architecture, CapabilityAvailability, EngineIdentity, Platform, RuntimeBackend,
@@ -22,6 +23,10 @@ pub const PRODUCT_NAME: &str = "AI Voice Studio";
 pub const PRODUCT_VERSION: &str = "0.0.0-dev";
 const MAX_PUBLIC_ERROR_BYTES: usize = 240;
 const PREPARE_COMMAND: &str = "pnpm desktop:native:prepare";
+const EXIT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
+const EXIT_READY: u8 = 0;
+const EXIT_CLEANING: u8 = 1;
+const EXIT_FINAL: u8 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -296,6 +301,145 @@ fn with_desktop_command_handler<R: tauri::Runtime>(
     ])
 }
 
+#[derive(Clone, Debug)]
+pub struct NavigationPolicy {
+    allowed_origin: tauri::Url,
+}
+
+impl NavigationPolicy {
+    pub fn production(windows: bool) -> Self {
+        let origin = if windows {
+            "http://tauri.localhost"
+        } else {
+            "tauri://localhost"
+        };
+        Self {
+            allowed_origin: origin.parse().expect("fixed packaged origin must be valid"),
+        }
+    }
+
+    pub fn development() -> Self {
+        Self {
+            allowed_origin: "http://127.0.0.1:1420"
+                .parse()
+                .expect("fixed development origin must be valid"),
+        }
+    }
+
+    pub fn for_mode(development: bool, windows: bool) -> Self {
+        if development {
+            Self::development()
+        } else {
+            Self::production(windows)
+        }
+    }
+
+    pub fn allows(&self, candidate: &tauri::Url) -> bool {
+        candidate.username().is_empty()
+            && candidate.password().is_none()
+            && candidate.scheme() == self.allowed_origin.scheme()
+            && candidate.host_str() == self.allowed_origin.host_str()
+            && candidate.port_or_known_default() == self.allowed_origin.port_or_known_default()
+    }
+
+    fn current() -> Self {
+        Self::for_mode(tauri::is_dev(), cfg!(windows))
+    }
+}
+
+pub fn create_main_window<R: tauri::Runtime>(
+    app: &tauri::App<R>,
+) -> tauri::Result<tauri::WebviewWindow<R>> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == "main")
+        .ok_or_else(|| tauri::Error::WindowNotFound)?
+        .clone();
+    let policy = NavigationPolicy::current();
+    tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+        .on_navigation(move |url| policy.allows(url))
+        .build()
+}
+
+type ExitCleanup = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+pub struct ExitDisposition {
+    prevent: bool,
+    cleanup: Option<ExitCleanup>,
+}
+
+impl ExitDisposition {
+    pub fn should_prevent(&self) -> bool {
+        self.prevent
+    }
+
+    pub fn into_cleanup(self) -> Option<ExitCleanup> {
+        self.cleanup
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExitCoordinator {
+    phase: Arc<AtomicU8>,
+}
+
+impl ExitCoordinator {
+    pub fn new() -> Self {
+        Self {
+            phase: Arc::new(AtomicU8::new(EXIT_READY)),
+        }
+    }
+
+    pub fn request_exit<C, F, O, E>(
+        &self,
+        timeout: Duration,
+        cleanup: C,
+        final_exit: E,
+    ) -> ExitDisposition
+    where
+        C: FnOnce() -> F + Send + 'static,
+        F: Future<Output = O> + Send + 'static,
+        O: Send + 'static,
+        E: FnOnce() + Send + 'static,
+    {
+        match self.phase.compare_exchange(
+            EXIT_READY,
+            EXIT_CLEANING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                let coordinator = self.clone();
+                ExitDisposition {
+                    prevent: true,
+                    cleanup: Some(Box::pin(async move {
+                        let _ = tokio::time::timeout(timeout, cleanup()).await;
+                        coordinator.phase.store(EXIT_FINAL, Ordering::Release);
+                        final_exit();
+                    })),
+                }
+            }
+            Err(EXIT_FINAL) => ExitDisposition {
+                prevent: false,
+                cleanup: None,
+            },
+            Err(_) => ExitDisposition {
+                prevent: true,
+                cleanup: None,
+            },
+        }
+    }
+}
+
+impl Default for ExitCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeControlPlane {
     manager: RuntimeManager,
@@ -456,6 +600,7 @@ pub fn run() -> Result<(), DesktopError> {
                 "The desktop control plane was initialized more than once.",
             )
         })?;
+        create_main_window(app)?;
         Ok(())
     });
     let app = builder.build(tauri::generate_context!()).map_err(|_| {
@@ -464,13 +609,26 @@ pub fn run() -> Result<(), DesktopError> {
             "The desktop shell could not start.",
         )
     })?;
-    let exit_started = AtomicBool::new(false);
-    app.run(move |_app_handle, event| {
-        if matches!(event, tauri::RunEvent::ExitRequested { .. })
-            && !exit_started.swap(true, Ordering::AcqRel)
-            && let Some(application) = owner.get()
-        {
-            let _ = tauri::async_runtime::block_on(application.shutdown());
+    let exit = ExitCoordinator::new();
+    app.run(move |app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            let cleanup_owner = Arc::clone(&owner);
+            let final_handle = app_handle.clone();
+            let disposition = exit.request_exit(
+                EXIT_CLEANUP_TIMEOUT,
+                move || async move {
+                    if let Some(application) = cleanup_owner.get() {
+                        let _ = application.shutdown().await;
+                    }
+                },
+                move || final_handle.exit(code.unwrap_or(0)),
+            );
+            if disposition.should_prevent() {
+                api.prevent_exit();
+            }
+            if let Some(cleanup) = disposition.into_cleanup() {
+                tauri::async_runtime::spawn(cleanup);
+            }
         }
     });
     Ok(())

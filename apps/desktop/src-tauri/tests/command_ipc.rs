@@ -2,10 +2,11 @@ use std::sync::{Arc, Mutex};
 
 use ai_voice_desktop::{
     CapabilityDto, CommandService, ControlPlane, ControlPlaneFuture, DesktopError,
-    MockPipelineSummaryDto, RuntimeStatusDto, with_desktop_commands,
+    MockPipelineSummaryDto, RuntimeStatusDto, create_main_window, with_desktop_commands,
 };
 use tauri::ipc::InvokeBody;
 use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
+use tauri::utils::config::WindowConfig;
 use tauri::webview::InvokeRequest;
 
 #[derive(Clone)]
@@ -81,12 +82,24 @@ impl ControlPlane for LifecycleFake {
 #[test]
 fn tauri_invoke_handler_exposes_exactly_five_typed_commands_and_serializes_errors() {
     let service = CommandService::new(LifecycleFake::new());
+    let checked_in_config: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    assert_eq!(
+        checked_in_config["build"]["devUrl"],
+        "http://127.0.0.1:1420"
+    );
+    assert_eq!(checked_in_config["app"]["windows"][0]["create"], false);
+    let mut context = mock_context(noop_assets());
+    context.config_mut().app.windows.push(WindowConfig {
+        label: "main".to_owned(),
+        create: false,
+        ..Default::default()
+    });
     let app = with_desktop_commands(mock_builder(), service)
-        .build(mock_context(noop_assets()))
+        .build(context)
         .unwrap();
-    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
-        .build()
-        .unwrap();
+    assert!(!app.config().app.windows[0].create);
+    let webview = create_main_window(&app).unwrap();
 
     let start = invoke(&webview, "start_runtime").unwrap();
     assert_eq!(start["state"], "connected");

@@ -47,9 +47,14 @@ export function mountDesktop(root: HTMLElement, api: DesktopApi): void {
     accept: (value: T) => void,
   ): Promise<void> => {
     if (state.pending !== null) return;
+    const focusedAction =
+      document.activeElement instanceof HTMLButtonElement && root.contains(document.activeElement)
+        ? document.activeElement
+        : null;
     state.pending = pending;
     state.error = null;
     render();
+    if (focusedAction !== null) statusCard.focus({ preventScroll: true });
     try {
       accept(await operation());
     } catch (error: unknown) {
@@ -57,93 +62,122 @@ export function mountDesktop(root: HTMLElement, api: DesktopApi): void {
     } finally {
       state.pending = null;
       render();
+      const focusTarget =
+        focusedAction !== null && !focusedAction.disabled
+          ? focusedAction
+          : [startButton, refreshButton, capabilityButton, summaryButton, stopButton].find(
+              (button) => !button.disabled,
+            );
+      focusTarget?.focus({ preventScroll: true });
     }
   };
+
+  const shell = element("main", "shell");
+  const header = element("header", "hero");
+  const eyebrow = element("p", "eyebrow", "Local native control plane");
+  const title = element("h1");
+  const version = element("p", "version");
+  header.append(eyebrow, title, version);
+
+  const statusCard = element("section", "card status-card");
+  statusCard.tabIndex = -1;
+  statusCard.setAttribute("aria-labelledby", "runtime-heading");
+  statusCard.setAttribute("aria-live", "polite");
+  statusCard.setAttribute("aria-atomic", "true");
+  const statusHeading = element("div", "section-heading");
+  const heading = element("h2", "", "Runtime");
+  heading.id = "runtime-heading";
+  const badge = element("span", "status-badge");
+  statusHeading.append(heading, badge);
+
+  const statusList = document.createElement("dl");
+  const runtimeVersion = appendDefinition(statusList, "Runtime version");
+  const generation = appendDefinition(statusList, "Generation");
+  const statusDetail = appendDefinition(statusList, "Status");
+
+  const actions = element("div", "actions");
+  const startButton = actionButton(() =>
+    void action("Starting…", api.startRuntime, (value) => (state.status = value)),
+  );
+  const refreshButton = actionButton(() =>
+    void action("Refreshing…", api.getRuntimeStatus, (value) => (state.status = value)),
+  );
+  const capabilityButton = actionButton(() =>
+    void action(
+      "Querying…",
+      api.getRuntimeCapabilities,
+      (value) => (state.capability = value),
+    ),
+  );
+  const summaryButton = actionButton(() =>
+    void action("Running…", api.runMockPipeline, (value) => (state.summary = value)),
+  );
+  const stopButton = actionButton(() =>
+    void action("Stopping…", api.stopRuntime, (value) => (state.status = value)),
+  );
+  actions.append(startButton, refreshButton, capabilityButton, summaryButton, stopButton);
+  const errorSlot = document.createElement("div");
+  statusCard.append(statusHeading, statusList, actions, errorSlot);
+
+  const results = element("div", "result-grid");
+  const capabilityResult = element("section", "card");
+  const summaryResult = element("section", "card");
+  results.append(capabilityResult, summaryResult);
+  shell.append(header, statusCard, results);
+  root.replaceChildren(shell);
 
   const render = (): void => {
     const connected = state.status.state === "connected";
     const startable = ["stopped", "crashed", "error"].includes(state.status.state);
     const busy = state.pending !== null;
-    root.replaceChildren();
-
-    const shell = element("main", "shell");
-    const header = element("header", "hero");
-    const eyebrow = element("p", "eyebrow", "Local native control plane");
-    const title = element("h1", "", state.status.productName);
-    const version = element("p", "version", `Development ${state.status.productVersion}`);
-    header.append(eyebrow, title, version);
-
-    const statusCard = element("section", "card status-card");
-    statusCard.setAttribute("aria-labelledby", "runtime-heading");
-    statusCard.setAttribute("aria-live", "polite");
-    statusCard.setAttribute("aria-atomic", "true");
-    const statusHeading = element("div", "section-heading");
-    const heading = element("h2", "", "Runtime");
-    heading.id = "runtime-heading";
-    const badge = element("span", "status-badge", stateLabels[state.status.state]);
+    title.textContent = state.status.productName;
+    version.textContent = `Development ${state.status.productVersion}`;
+    badge.textContent = stateLabels[state.status.state];
     badge.dataset.state = state.status.state;
-    statusHeading.append(heading, badge);
-    statusCard.append(
-      statusHeading,
-      definitionList([
-        ["Runtime version", state.status.runtimeVersion],
-        ["Generation", String(state.status.generation)],
-        ["Status", state.status.detail],
-      ]),
+    runtimeVersion.textContent = state.status.runtimeVersion;
+    generation.textContent = String(state.status.generation);
+    statusDetail.textContent = state.status.detail;
+
+    updateActionButton(
+      startButton,
+      state.pending === "Starting…" ? "Starting…" : "Start Runtime",
+      busy || !startable,
+      state.pending === "Starting…",
+    );
+    updateActionButton(
+      refreshButton,
+      state.pending === "Refreshing…" ? "Refreshing…" : "Refresh Status",
+      busy,
+      state.pending === "Refreshing…",
+    );
+    updateActionButton(
+      capabilityButton,
+      state.pending === "Querying…" ? "Querying…" : "Query Capabilities",
+      busy || !connected,
+      state.pending === "Querying…",
+    );
+    updateActionButton(
+      summaryButton,
+      state.pending === "Running…" ? "Running…" : "Run Mock Pipeline",
+      busy || !connected,
+      state.pending === "Running…",
+    );
+    updateActionButton(
+      stopButton,
+      state.pending === "Stopping…" ? "Stopping…" : "Stop Runtime",
+      busy || !connected,
+      state.pending === "Stopping…",
     );
 
-    const actions = element("div", "actions");
-    actions.append(
-      actionButton(
-        state.pending === "Starting…" ? "Starting…" : "Start Runtime",
-        busy || !startable,
-        () => void action("Starting…", api.startRuntime, (value) => (state.status = value)),
-        state.pending === "Starting…",
-      ),
-      actionButton(
-        state.pending === "Refreshing…" ? "Refreshing…" : "Refresh Status",
-        busy,
-        () =>
-          void action("Refreshing…", api.getRuntimeStatus, (value) => (state.status = value)),
-        state.pending === "Refreshing…",
-      ),
-      actionButton(
-        state.pending === "Querying…" ? "Querying…" : "Query Capabilities",
-        busy || !connected,
-        () =>
-          void action(
-            "Querying…",
-            api.getRuntimeCapabilities,
-            (value) => (state.capability = value),
-          ),
-        state.pending === "Querying…",
-      ),
-      actionButton(
-        state.pending === "Running…" ? "Running…" : "Run Mock Pipeline",
-        busy || !connected,
-        () =>
-          void action("Running…", api.runMockPipeline, (value) => (state.summary = value)),
-        state.pending === "Running…",
-      ),
-      actionButton(
-        state.pending === "Stopping…" ? "Stopping…" : "Stop Runtime",
-        busy || !connected,
-        () => void action("Stopping…", api.stopRuntime, (value) => (state.status = value)),
-        state.pending === "Stopping…",
-      ),
-    );
-    statusCard.append(actions);
-
+    errorSlot.replaceChildren();
     if (state.error !== null) {
       const alert = element("p", "error", state.error);
       alert.setAttribute("role", "alert");
-      statusCard.append(alert);
+      errorSlot.append(alert);
     }
 
-    const results = element("div", "result-grid");
-    results.append(capabilityCard(state.capability), summaryCard(state.summary));
-    shell.append(header, statusCard, results);
-    root.append(shell);
+    renderCapability(capabilityResult, state.capability);
+    renderSummary(summaryResult, state.summary);
   };
 
   render();
@@ -159,12 +193,12 @@ export function mountDesktop(root: HTMLElement, api: DesktopApi): void {
   })();
 }
 
-function capabilityCard(capability: CapabilityDto | null): HTMLElement {
-  const card = element("section", "card");
+function renderCapability(card: HTMLElement, capability: CapabilityDto | null): void {
+  card.replaceChildren();
   card.append(element("h2", "", "Capabilities"));
   if (capability === null) {
     card.append(element("p", "empty", "Connect the Runtime, then query its bounded capability summary."));
-    return card;
+    return;
   }
   card.append(
     definitionList([
@@ -175,15 +209,14 @@ function capabilityCard(capability: CapabilityDto | null): HTMLElement {
       ["Availability", `${capability.runtimeAvailability} / ${capability.engineAvailability}`],
     ]),
   );
-  return card;
 }
 
-function summaryCard(summary: MockPipelineSummaryDto | null): HTMLElement {
-  const card = element("section", "card");
+function renderSummary(card: HTMLElement, summary: MockPipelineSummaryDto | null): void {
+  card.replaceChildren();
   card.append(element("h2", "", "Latest Mock Summary"));
   if (summary === null) {
     card.append(element("p", "empty", "No deterministic native summary has been requested."));
-    return card;
+    return;
   }
   card.append(
     definitionList([
@@ -195,22 +228,31 @@ function summaryCard(summary: MockPipelineSummaryDto | null): HTMLElement {
       ["Stream generation", String(summary.streamGeneration)],
     ]),
   );
-  return card;
 }
 
-function actionButton(
-  label: string,
-  disabled: boolean,
-  activate: () => void,
-  busy: boolean,
-): HTMLButtonElement {
+function actionButton(activate: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
+  button.addEventListener("click", activate);
+  return button;
+}
+
+function updateActionButton(
+  button: HTMLButtonElement,
+  label: string,
+  disabled: boolean,
+  busy: boolean,
+): void {
   button.textContent = label;
   button.disabled = disabled;
   if (busy) button.setAttribute("aria-busy", "true");
-  button.addEventListener("click", activate);
-  return button;
+  else button.removeAttribute("aria-busy");
+}
+
+function appendDefinition(list: HTMLDListElement, name: string): HTMLElement {
+  const value = document.createElement("dd");
+  list.append(element("dt", "", name), value);
+  return value;
 }
 
 function definitionList(rows: ReadonlyArray<readonly [string, string]>): HTMLDListElement {

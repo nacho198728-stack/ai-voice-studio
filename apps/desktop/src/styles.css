@@ -150,7 +150,8 @@ button:hover:not(:disabled) {
   transform: translateY(-1px);
 }
 
-button:focus-visible {
+button:focus-visible,
+.status-card:focus-visible {
   outline: 3px solid #9e8cff;
   outline-offset: 3px;
 }

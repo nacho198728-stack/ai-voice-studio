@@ -50,8 +50,14 @@ leaking them into RuntimeHost or the engine ABI.
 - The only webview-to-native authority is the explicit five-command allowlist;
   every Phase 0.5 command is input-free.
 - The main window is local-only. A restrictive content security policy blocks
-  network connections, media, embedded frames, objects, and form targets; release
-  devtools and remote navigation are disabled.
+  network connections, media, embedded frames, objects, and form targets. The
+  configured window is created explicitly in `setup` with an `on_navigation`
+  guard: release accepts only the platform's exact packaged Tauri origin
+  (`tauri://localhost` or the Windows Wry workaround
+  `http://tauri.localhost`), and development accepts only the configured
+  `http://127.0.0.1:1420` origin. External HTTP(S), similar hosts, credentials,
+  and `file:`, `data:`, or `javascript:` navigation are rejected independently
+  of CSP and capabilities. Devtools are disabled.
 - The Rust process never loads the VoiceEngine dynamic library. It starts and
   supervises the C++ sidecar, which alone loads and invokes the C ABI plugin.
 - Errors crossing into the webview are stable, bounded, and redacted. Internal
@@ -64,13 +70,19 @@ leaking them into RuntimeHost or the engine ABI.
 The Tauri application owns one retained telemetry guard and one managed command
 service backed by one `RuntimeManager`. Initialization is executed on Tauri's
 async runtime because RuntimeHost owns asynchronous process supervision. Command
-calls do not hold a global mutex across awaits. Window/application exit requests
-a bounded, ordered Runtime shutdown and reap; RuntimeHost's kill-on-drop behavior
-is the final orphan-prevention fallback.
+calls do not hold a global mutex across awaits. The first application exit
+request is prevented synchronously and schedules exactly one bounded, ordered
+Runtime shutdown/reap on Tauri's async runtime. Repeated requests remain
+prevented while cleanup is active. Completion, failure, or the adapter's outer
+cleanup deadline authorizes one final `AppHandle::exit`, which is not prevented;
+RuntimeHost's kill-on-drop behavior is the final orphan-prevention fallback.
 
-The frontend owns presentation state only. It disables conflicting actions while
-a command is pending, renders the six manager states, and recovers controls after
-bounded command failure. It does not infer or duplicate native lifecycle state.
+The frontend owns presentation state only. It retains stable action nodes,
+disables conflicting actions while a command is pending, renders the six manager
+states, preserves keyboard focus through pending/success/error updates, and
+moves focus to the live Runtime status while every action is disabled before
+restoring a reasonable enabled action. It recovers controls after bounded
+command failure and does not infer or duplicate native lifecycle state.
 
 ## Packaging implications
 
