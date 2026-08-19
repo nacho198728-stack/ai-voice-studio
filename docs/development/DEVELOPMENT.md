@@ -64,19 +64,29 @@ verified on a real Windows x64 runner.
 
 ## Diagnose, build, and test
 
-From the repository root, run the read-only doctor before building:
+From the repository root, use the standalone Node.js doctor before building:
 
 ```sh
-pnpm run doctor
-pnpm run doctor -- --json
+node tools/scripts/doctor.mjs
+node tools/scripts/doctor.mjs --json
 ```
 
-The doctor only reads repository declarations and invokes version probes. It
-never installs or upgrades tools, writes configuration, changes `PATH`, invokes
-a package manager to modify state, or requires Python. It emits `PASS`,
-`WARN`, `FAIL`, and `SKIP` records; a missing required tool or incompatible
-required version exits non-zero. Xcode is checked only on macOS and MSVC only
-on Windows.
+This standalone form is the doctor bootstrap guarantee: it requires Node.js
+only and cannot cause pnpm/Corepack to run before the doctor starts. The root
+`pnpm run doctor` script is a convenience command only after pnpm is already
+available; do not use it to diagnose a fresh machine because the pnpm shim
+executes before the script can enforce its read-only rules.
+
+The doctor only reads repository declarations and invokes version probes. Its
+pnpm probe sets `COREPACK_ENABLE_NETWORK=0`, so a Corepack shim cannot fetch a
+missing package-manager release. Its Rust probes set `RUSTUP_AUTO_INSTALL=0`,
+resolve `rustup which --toolchain <pinned-version> <binary>`, then invoke the
+returned installed binary directly rather than a repository-selecting Rustup
+proxy. It never installs or upgrades tools, writes configuration, changes
+`PATH`, invokes a package manager to modify state, or requires Python. It
+emits `PASS`, `WARN`, `FAIL`, and `SKIP` records; a missing required tool or
+incompatible required version exits non-zero. Xcode is checked only on macOS
+and MSVC only on Windows.
 
 Install JavaScript workspace dependencies using the pinned package manager:
 

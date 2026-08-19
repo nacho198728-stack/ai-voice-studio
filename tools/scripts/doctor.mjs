@@ -22,14 +22,15 @@ const validatedVersions = {
   xcode: '26.6.0',
 };
 
-function defaultRunCommand(command, args) {
+function defaultRunCommand(command, args, { environment = {} } = {}) {
   const result = spawnSync(command, args, {
     encoding: 'utf8',
+    env: { ...process.env, ...environment },
     shell: false,
   });
 
   if (result.error?.code === 'ENOENT') {
-    return { found: false, stdout: '', stderr: '', exitCode: null };
+    return { found: false, stdout: '', stderr: '', exitCode: null, signal: null };
   }
 
   return {
@@ -37,6 +38,7 @@ function defaultRunCommand(command, args) {
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
     exitCode: result.status,
+    signal: result.signal,
   };
 }
 
@@ -82,15 +84,21 @@ function readDeclarations(root) {
   return { nodeVersion, pnpmVersion, rustChannel };
 }
 
-function checkTool({ id, label, command, args, expectedVersion, minimumVersion, validatedVersion, allowNonzeroExit = false, runCommand }) {
-  const probe = runCommand(command, args);
+function checkTool({ id, label, command, args, expectedVersion, minimumVersion, validatedVersion, acceptNonzeroExit, environment, runCommand }) {
+  const probe = runCommand(command, args, { environment });
   const output = `${probe.stdout}\n${probe.stderr}`;
   const actualVersion = extractVersion(output);
 
   if (!probe.found) {
     return { id, label, status: 'fail', detail: 'not found' };
   }
-  if (probe.exitCode != null && probe.exitCode !== 0 && !allowNonzeroExit) {
+  if (probe.signal) {
+    return { id, label, status: 'fail', detail: `terminated by signal ${probe.signal}` };
+  }
+  if (probe.exitCode == null) {
+    return { id, label, status: 'fail', detail: 'command exited without a status' };
+  }
+  if (probe.exitCode !== 0 && !acceptNonzeroExit?.(probe, output)) {
     return { id, label, status: 'fail', detail: `command exited ${probe.exitCode}` };
   }
   if (!actualVersion) {
@@ -109,6 +117,40 @@ function checkTool({ id, label, command, args, expectedVersion, minimumVersion, 
   return { id, label, status: 'pass', detail: actualVersion };
 }
 
+function checkRustBinary({ id, label, binary, channel, runCommand }) {
+  const environment = { RUSTUP_AUTO_INSTALL: '0' };
+  const resolution = runCommand('rustup', ['which', '--toolchain', channel, binary], { environment });
+
+  if (!resolution.found) {
+    return { id, label, status: 'fail', detail: `installed ${channel} ${binary} was not found` };
+  }
+  if (resolution.signal) {
+    return { id, label, status: 'fail', detail: `rustup resolution terminated by signal ${resolution.signal}` };
+  }
+  if (resolution.exitCode == null) {
+    return { id, label, status: 'fail', detail: 'rustup resolution exited without a status' };
+  }
+  if (resolution.exitCode !== 0 || !resolution.stdout.trim()) {
+    return { id, label, status: 'fail', detail: `installed ${channel} ${binary} was not found` };
+  }
+
+  return checkTool({
+    id,
+    label,
+    command: resolution.stdout.trim(),
+    args: ['--version'],
+    expectedVersion: channel,
+    environment,
+    runCommand,
+  });
+}
+
+function isMsvcUsageResult(probe, output) {
+  return probe.exitCode === 2
+    && /Microsoft \(R\) C\/C\+\+ Optimizing Compiler Version \d+\.\d+\.\d+ for /i.test(output)
+    && /usage: cl \[ option\.\.\. \] filename\.\.\./i.test(output);
+}
+
 function skippedCheck(id, label, platform) {
   return { id, label, status: 'skip', detail: `not evaluated on ${platform}` };
 }
@@ -120,12 +162,13 @@ export function runDoctor({
   declarations,
 } = {}) {
   const resolvedDeclarations = declarations ?? readDeclarations(targetRepositoryRoot);
+  const rustupEnvironment = { RUSTUP_AUTO_INSTALL: '0' };
   const checks = [
     checkTool({ id: 'node', label: 'Node.js', command: 'node', args: ['--version'], expectedVersion: resolvedDeclarations.nodeVersion, runCommand }),
-    checkTool({ id: 'pnpm', label: 'pnpm', command: 'pnpm', args: ['--version'], expectedVersion: resolvedDeclarations.pnpmVersion, runCommand }),
-    checkTool({ id: 'rustup', label: 'rustup', command: 'rustup', args: ['--version'], runCommand }),
-    checkTool({ id: 'rustc', label: 'rustc', command: 'rustc', args: ['--version'], expectedVersion: resolvedDeclarations.rustChannel, runCommand }),
-    checkTool({ id: 'cargo', label: 'Cargo', command: 'cargo', args: ['--version'], expectedVersion: resolvedDeclarations.rustChannel, runCommand }),
+    checkTool({ id: 'pnpm', label: 'pnpm', command: 'pnpm', args: ['--version'], expectedVersion: resolvedDeclarations.pnpmVersion, environment: { COREPACK_ENABLE_NETWORK: '0' }, runCommand }),
+    checkTool({ id: 'rustup', label: 'rustup', command: 'rustup', args: ['--version'], environment: rustupEnvironment, runCommand }),
+    checkRustBinary({ id: 'rustc', label: 'rustc', binary: 'rustc', channel: resolvedDeclarations.rustChannel, runCommand }),
+    checkRustBinary({ id: 'cargo', label: 'Cargo', binary: 'cargo', channel: resolvedDeclarations.rustChannel, runCommand }),
     checkTool({ id: 'cmake', label: 'CMake', command: 'cmake', args: ['--version'], minimumVersion: minimumVersions.cmake, validatedVersion: validatedVersions.cmake, runCommand }),
     checkTool({ id: 'ninja', label: 'Ninja', command: 'ninja', args: ['--version'], minimumVersion: minimumVersions.ninja, validatedVersion: validatedVersions.ninja, runCommand }),
     checkTool({ id: 'git', label: 'Git', command: 'git', args: ['--version'], minimumVersion: minimumVersions.git, validatedVersion: validatedVersions.git, runCommand }),
@@ -133,7 +176,7 @@ export function runDoctor({
       ? checkTool({ id: 'xcode', label: 'Xcode', command: 'xcodebuild', args: ['-version'], minimumVersion: minimumVersions.xcode, validatedVersion: validatedVersions.xcode, runCommand })
       : skippedCheck('xcode', 'Xcode', platform),
     platform === 'win32'
-      ? checkTool({ id: 'msvc', label: 'MSVC', command: 'cl', args: [], minimumVersion: minimumVersions.msvc, allowNonzeroExit: true, runCommand })
+      ? checkTool({ id: 'msvc', label: 'MSVC', command: 'cl', args: [], minimumVersion: minimumVersions.msvc, acceptNonzeroExit: isMsvcUsageResult, runCommand })
       : skippedCheck('msvc', 'MSVC', platform),
   ];
 
