@@ -193,3 +193,14 @@ test("Tauri mock IPC uses the platform-native packaged origin", async () => {
     assert.doesNotMatch(source, /url: "tauri:\/\/localhost"/u);
   }
 });
+
+test("Rust configuration tests mutate parsed JSON instead of checkout-specific text", async () => {
+  const source = await readFile(
+    path.join(repositoryRoot, "apps/runtime-host/tests/config_capability.rs"),
+    "utf8",
+  );
+  assert.match(source, /serde_json::from_slice/u);
+  assert.match(source, /document\["debug"\]\["enabled"\]/u);
+  assert.match(source, /document\["debug"\]\["log_level"\]/u);
+  assert.doesNotMatch(source, /include_str!\([^)]*config\.json[^)]*\)[\s\S]*?\.replace/u);
+});

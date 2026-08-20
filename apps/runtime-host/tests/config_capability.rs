@@ -9,6 +9,14 @@ fn default_config() -> ProductConfig {
     ProductConfig::load_from_bytes(include_bytes!("../../../config/config.json")).unwrap()
 }
 
+fn config_with_debug(enabled: bool, log_level: &str) -> ProductConfig {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(include_bytes!("../../../config/config.json")).unwrap();
+    document["debug"]["enabled"] = enabled.into();
+    document["debug"]["log_level"] = log_level.into();
+    ProductConfig::load_from_bytes(&serde_json::to_vec(&document).unwrap()).unwrap()
+}
+
 fn absolute_resource(name: &str) -> PathBuf {
     std::env::current_dir().unwrap().join("build").join(name)
 }
@@ -55,10 +63,7 @@ fn validated_product_config_maps_every_launch_setting_but_not_resource_authority
     assert_eq!(other.runtime_path, other_runtime);
     assert_eq!(other.plugin_path, other_plugin);
 
-    let disabled_verbose_bytes = include_str!("../../../config/config.json")
-        .replace("\"log_level\": \"info\"", "\"log_level\": \"debug\"");
-    let disabled_verbose =
-        ProductConfig::load_from_bytes(disabled_verbose_bytes.as_bytes()).unwrap();
+    let disabled_verbose = config_with_debug(false, "debug");
     let launch = RuntimeManagerConfig::from_product_config(
         &disabled_verbose,
         absolute_resource("clamped-runtime"),
@@ -69,13 +74,7 @@ fn validated_product_config_maps_every_launch_setting_but_not_resource_authority
     assert_eq!(launch.logging_policy.effective_level(), Level::Info);
     assert!(!launch.logging_policy.debug_enabled());
 
-    let verbose_bytes = include_str!("../../../config/config.json")
-        .replace(
-            "\"debug\": {\n    \"enabled\": false",
-            "\"debug\": {\n    \"enabled\": true",
-        )
-        .replace("\"log_level\": \"info\"", "\"log_level\": \"trace\"");
-    let verbose = ProductConfig::load_from_bytes(verbose_bytes.as_bytes()).unwrap();
+    let verbose = config_with_debug(true, "trace");
     let launch = RuntimeManagerConfig::from_product_config(
         &verbose,
         absolute_resource("verbose-runtime"),
