@@ -261,7 +261,7 @@ test("MSVC skips only the non-deterministic process-wide allocation interception
     readFile(path.join(repositoryRoot, "tests/runtime/stdio_runtime_test.cpp"), "utf8"),
   ]);
   for (const source of [messageTest, stdioTest]) {
-    assert.match(source, /#ifndef _WIN32\nvoid\* operator new/u);
+    assert.match(source, /#ifndef _WIN32\r?\nvoid\* operator new/u);
     assert.match(source, /allocation injection: skipped on MSVC/u);
     assert.match(source, /#ifndef _WIN32[\s\S]*allocation_fail/u);
   }

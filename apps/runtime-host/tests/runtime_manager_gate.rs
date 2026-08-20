@@ -230,7 +230,13 @@ async fn stderr_flood_is_drained_without_blocking_and_retains_only_the_bounded_t
         assert_eq!(manager.ping(b"alive").await.unwrap(), b"alive");
         let status = manager.get_runtime_status().await.unwrap();
         assert_eq!(status.stderr_tail.len(), 127);
-        assert!(status.stderr_tail.ends_with(b"stderr-flood-complete\n"));
+        assert!(
+            status
+                .stderr_tail
+                .strip_suffix(b"\r\n")
+                .or_else(|| status.stderr_tail.strip_suffix(b"\n"))
+                .is_some_and(|tail| tail.ends_with(b"stderr-flood-complete"))
+        );
         manager.stop_runtime().await.unwrap();
         assert_pid_gone(pid).await;
         guard.disarm();

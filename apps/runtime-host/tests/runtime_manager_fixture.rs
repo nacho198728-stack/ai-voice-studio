@@ -367,7 +367,13 @@ async fn inherited_continuous_stdout_cannot_starve_absolute_drain_bound() {
         .expect("lifecycle reply exceeded the absolute pipe-drain bound")
         .unwrap_err();
 
-    assert_eq!(error.kind, ManagerErrorKind::Protocol);
+    // The parent exits while descendants retain stdout. The kernel may report
+    // the dead parent's stdin first (Process) or the poisoned protocol stream
+    // first (Protocol); both must obey the same bounded reap barrier.
+    assert!(matches!(
+        error.kind,
+        ManagerErrorKind::Process | ManagerErrorKind::Protocol
+    ));
     assert!(
         began.elapsed() < Duration::from_millis(90),
         "continuous stdout exceeded the independent discard-work cap: {:?}",

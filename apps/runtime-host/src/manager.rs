@@ -2308,16 +2308,19 @@ impl Actor {
     }
 
     async fn handle_unexpected_stdout_eof(&mut self) {
-        let poll = match self.process.as_mut() {
-            Some(process) if process.exit_status.is_none() => process
-                .child
-                .as_mut()
-                .expect("live process has a child")
-                .try_wait(),
+        let observed = match self.process.as_mut() {
+            Some(process) if process.exit_status.is_none() => {
+                let child = process.child.as_mut().expect("live process has a child");
+                match timeout(EXIT_POLL_INTERVAL, child.wait()).await {
+                    Ok(Ok(status)) => Ok(Some(status)),
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Ok(None),
+                }
+            }
             Some(process) => Ok(process.exit_status),
             None => return,
         };
-        match poll {
+        match observed {
             Ok(Some(status)) => {
                 if let Some(process) = self.process.as_mut() {
                     process.exit_status = Some(status);
@@ -2327,7 +2330,9 @@ impl Actor {
             }
             Ok(None) => {
                 self.fail_stream(
-                    ManagerError::protocol("Runtime stdout closed before a completed shutdown"),
+                    ManagerError::protocol(
+                        "Runtime stdout closed while its process remained alive",
+                    ),
                     RuntimeExitReason::ProtocolFailure,
                 )
                 .await;
