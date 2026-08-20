@@ -125,7 +125,18 @@ void write_u32(std::vector<std::uint8_t>& frame, std::size_t offset, std::uint32
 }
 
 [[noreturn]] void descendant_writer(std::uint64_t request_id) {
-#if !defined(_WIN32)
+#if defined(_WIN32)
+  // Anonymous-pipe writes are synchronous on Windows. If a hostile inherited
+  // handle keeps the pipe nominally open after the Runtime parent exits, the
+  // writer can remain blocked inside fwrite and outlive the test that created
+  // it. The watchdog is deliberately far beyond the manager's 500 ms drain
+  // assertion, so it cannot satisfy that assertion; it only guarantees final
+  // fixture cleanup after the lifecycle behavior has already been observed.
+  std::thread([] {
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    static_cast<void>(::TerminateProcess(::GetCurrentProcess(), 0U));
+  }).detach();
+#else
   ::signal(SIGPIPE, SIG_DFL);
 #endif
   const message::RuntimeMessage value{
