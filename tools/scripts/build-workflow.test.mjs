@@ -87,6 +87,21 @@ test("both jobs execute the locked workspace and Debug plus Release contracts", 
   }
 });
 
+test("both jobs stage real native artifacts before checking the Tauri Rust workspace", async () => {
+  const workflow = await loadWorkflow();
+  for (const job of Object.values(workflow.jobs)) {
+    const run = commands(job);
+    const stageIndex = run.indexOf("stage-desktop-native.mjs --profile Release");
+    const rustCheckIndex = run.indexOf("cargo +1.97.1 check --locked --workspace --all-targets");
+    assert.notEqual(stageIndex, -1);
+    assert.notEqual(rustCheckIndex, -1);
+    assert.ok(
+      stageIndex < rustCheckIndex,
+      "native staging must precede the Tauri build script invoked by cargo check",
+    );
+  }
+});
+
 test("platform jobs fail closed on architecture and exercise native Tauri layouts", async () => {
   const workflow = await loadWorkflow();
   const macos = commands(workflow.jobs["macos-arm64"]);

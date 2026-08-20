@@ -61,16 +61,7 @@ jobs:
           pnpm --filter @ai-voice-studio/desktop typecheck
           pnpm --filter @ai-voice-studio/desktop build
 
-      - name: Check Rust workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo +1.97.1 fmt --all -- --check
-          cargo +1.97.1 check --locked --workspace --all-targets
-          cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings
-          cargo +1.97.1 test --locked --workspace
-
-      - name: Build and test native Debug and Release
+      - name: Build, test, and stage native Debug and Release
         shell: bash
         run: |
           set -euo pipefail
@@ -80,12 +71,21 @@ jobs:
           cmake --preset native-release
           cmake --build --preset native-release --parallel 2
           ctest --preset native-release
+          node tools/scripts/stage-desktop-native.mjs --profile Release --target aarch64-apple-darwin
+
+      - name: Check Rust workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 fmt --all -- --check
+          cargo +1.97.1 check --locked --workspace --all-targets
+          cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings
+          cargo +1.97.1 test --locked --workspace
 
       - name: Build and verify the Tauri app bundle
         shell: bash
         run: |
           set -euo pipefail
-          node tools/scripts/stage-desktop-native.mjs --profile Release --target aarch64-apple-darwin
           pnpm desktop:test:native
           pnpm --filter @ai-voice-studio/desktop tauri build --bundles app --ci
           node tools/scripts/verify-desktop-bundle.mjs \
@@ -149,19 +149,7 @@ jobs:
           pnpm --filter @ai-voice-studio/desktop build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Check Rust workspace
-        shell: pwsh
-        run: |
-          cargo +1.97.1 fmt --all -- --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo +1.97.1 check --locked --workspace --all-targets
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo +1.97.1 test --locked --workspace
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Build native gates and the Tauri portable layout with MSVC
+      - name: Build native gates, check Rust, and verify the Tauri portable layout with MSVC
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -190,6 +178,16 @@ jobs:
 
           node tools/scripts/stage-desktop-native.mjs --profile Release --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          cargo +1.97.1 fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.97.1 check --locked --workspace --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.97.1 test --locked --workspace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           pnpm desktop:test:native
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm --filter @ai-voice-studio/desktop tauri build --no-bundle --ci

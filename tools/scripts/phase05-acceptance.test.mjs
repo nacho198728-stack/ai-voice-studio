@@ -223,7 +223,7 @@ test("acceptance gate rejects a false Windows result or prematurely checked fina
 
 test("acceptance gate rejects an incomplete matrix and artifact path drift", async () => {
   const input = await loadPhase05Acceptance(repositoryRoot);
-  const windowsMarkdown = input.markdown.replaceAll("\n", "\r\n");
+  const windowsMarkdown = input.markdown.replaceAll("\r\n", "\n").replaceAll("\n", "\r\n");
 
   assert.throws(
     () =>
