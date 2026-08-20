@@ -361,11 +361,16 @@ async fn inherited_continuous_stdout_cannot_starve_absolute_drain_bound() {
     let manager = RuntimeManager::new(config).unwrap();
     let pid = manager.start_runtime().await.unwrap().pid.unwrap();
     let began = Instant::now();
+    eprintln!("drain-descendant phase=request pid={pid}");
 
     let error = tokio::time::timeout(Duration::from_millis(500), manager.ping(b"drain"))
         .await
         .expect("lifecycle reply exceeded the absolute pipe-drain bound")
         .unwrap_err();
+    eprintln!(
+        "drain-descendant phase=request-complete elapsed_ms={}",
+        began.elapsed().as_millis()
+    );
 
     // The parent exits while descendants retain stdout. The kernel may report
     // the dead parent's stdin first (Process) or the poisoned protocol stream
@@ -384,15 +389,17 @@ async fn inherited_continuous_stdout_cannot_starve_absolute_drain_bound() {
         "continuous stdout exceeded the platform discard-work cap {discard_work_cap:?}: {:?}",
         began.elapsed()
     );
-    assert_pid_gone(pid).await;
-    assert!(
-        manager
-            .get_runtime_status()
-            .await
-            .unwrap()
-            .stderr_tail
-            .ends_with(b"drain-parent-final-stderr")
-    );
+    tokio::time::timeout(Duration::from_secs(5), assert_pid_gone(pid))
+        .await
+        .expect("PID observation exceeded its diagnostic deadline");
+    eprintln!("drain-descendant phase=pid-reaped");
+    let status = tokio::time::timeout(Duration::from_secs(5), manager.get_runtime_status())
+        .await
+        .expect("status observation exceeded its diagnostic deadline")
+        .unwrap();
+    eprintln!("drain-descendant phase=status-observed");
+    assert!(status.stderr_tail.ends_with(b"drain-parent-final-stderr"));
+    eprintln!("drain-descendant phase=complete");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
