@@ -138,6 +138,7 @@ class AllocationFailureReader final : public runtime::ByteReader {
  private:
   std::vector<std::uint8_t> bytes_;
 };
+#endif
 
 class MemoryWriter final : public runtime::ByteWriter {
  public:
@@ -162,6 +163,7 @@ class MemoryWriter final : public runtime::ByteWriter {
   bool fail_flush{false};
 };
 
+#ifndef _WIN32
 class AllocationFailurePipeline final : public runtime::PipelineService {
  public:
   [[nodiscard]] bool available() const noexcept override { return true; }
