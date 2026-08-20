@@ -220,4 +220,23 @@ test("native RuntimeMessage diagnostics fail closed without a Windows assertion 
   assert.match(source, /_set_error_mode\(_OUT_TO_STDERR\)/u);
   assert.match(source, /RuntimeMessage fixture could not be opened/u);
   assert.match(source, /RuntimeMessage phase: chunking, sticky failure, and EOF/u);
+  assert.match(source, /catch \(const std::exception& error\)/u);
+});
+
+test("Windows native failures are bounded and run before expensive Rust compilation", async () => {
+  const [workflow, cmake, logging] = await Promise.all([
+    readFile(path.join(repositoryRoot, ".github/workflows/build.yml"), "utf8"),
+    readFile(path.join(repositoryRoot, "tests/CMakeLists.txt"), "utf8"),
+    readFile(path.join(repositoryRoot, "tests/runtime/runtime_logging_test.cpp"), "utf8"),
+  ]);
+  const nativeGate = workflow.indexOf("ctest --preset native-debug --timeout 20");
+  const rustCheck = workflow.indexOf("cargo +1.97.1 fmt --all -- --check", nativeGate);
+  assert.ok(nativeGate >= 0);
+  assert.ok(rustCheck > nativeGate);
+  assert.match(
+    cmake,
+    /set_tests_properties\(aivs_runtime_logging_test PROPERTIES TIMEOUT 20\)/u,
+  );
+  assert.match(logging, /Runtime logging phase: initialization failures/u);
+  assert.match(logging, /catch \(const std::exception& error\)/u);
 });

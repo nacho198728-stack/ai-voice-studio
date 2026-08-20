@@ -206,6 +206,7 @@ add_test(NAME aivs_runtime_options_test COMMAND aivs_runtime_options_test)
 add_executable(aivs_runtime_logging_test runtime/runtime_logging_test.cpp)
 target_link_libraries(aivs_runtime_logging_test PRIVATE ai_voice::runtime_logging)
 add_test(NAME aivs_runtime_logging_test COMMAND aivs_runtime_logging_test)
+set_tests_properties(aivs_runtime_logging_test PROPERTIES TIMEOUT 20)
 
 add_executable(aivs_runtime_late_log_failure_test runtime/runtime_late_log_failure_test.cpp)
 target_link_libraries(

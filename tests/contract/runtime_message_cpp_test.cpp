@@ -22,6 +22,19 @@
 
 #include <ai_voice_contracts/runtime_message.hpp>
 
+namespace test_support {
+
+[[noreturn]] void assertion_failed(const char* expression, int line) {
+  throw std::runtime_error(
+      "RuntimeMessage assertion failed at line " + std::to_string(line) + ": " + expression);
+}
+
+}  // namespace test_support
+
+#undef assert
+#define assert(expression) \
+  ((expression) ? static_cast<void>(0) : test_support::assertion_failed(#expression, __LINE__))
+
 namespace allocation_fault {
 
 thread_local std::size_t countdown = std::numeric_limits<std::size_t>::max();
@@ -317,6 +330,7 @@ void allocation_failures_are_terminal_and_release_resources() {
     allocation_fault::fail_after(successful_allocations);
     const auto result = decoder.feed(input);
     allocation_fault::disable();
+    assert(result.error.has_value());
     assert(result.error->code == ErrorCode::InternalError);
     assert(result.error->kind == message::FrameErrorKind::AllocationFailure);
     assert(result.messages.empty());
@@ -487,19 +501,25 @@ int main() {
 #ifdef _WIN32
   _set_error_mode(_OUT_TO_STDERR);
 #endif
-  std::cerr << "RuntimeMessage phase: shared fixture and round trip" << std::endl;
-  shared_fixture_and_round_trip();
-  std::cerr << "RuntimeMessage phase: literal kinds and commands" << std::endl;
-  all_literal_kinds_and_commands();
-  std::cerr << "RuntimeMessage phase: chunking, sticky failure, and EOF" << std::endl;
-  chunking_sticky_and_eof();
-  std::cerr << "RuntimeMessage phase: bounded feed resources" << std::endl;
-  bounded_feed_resources();
-  std::cerr << "RuntimeMessage phase: allocation failures" << std::endl;
-  allocation_failures_are_terminal_and_release_resources();
-  std::cerr << "RuntimeMessage phase: malformed and failed state" << std::endl;
-  malformed_and_failed_state();
-  std::cerr << "RuntimeMessage phase: encode limits and invariants" << std::endl;
-  encode_limits_and_invariants();
-  return 0;
+  try {
+    std::cerr << "RuntimeMessage phase: shared fixture and round trip" << std::endl;
+    shared_fixture_and_round_trip();
+    std::cerr << "RuntimeMessage phase: literal kinds and commands" << std::endl;
+    all_literal_kinds_and_commands();
+    std::cerr << "RuntimeMessage phase: chunking, sticky failure, and EOF" << std::endl;
+    chunking_sticky_and_eof();
+    std::cerr << "RuntimeMessage phase: bounded feed resources" << std::endl;
+    bounded_feed_resources();
+    std::cerr << "RuntimeMessage phase: allocation failures" << std::endl;
+    allocation_failures_are_terminal_and_release_resources();
+    std::cerr << "RuntimeMessage phase: malformed and failed state" << std::endl;
+    malformed_and_failed_state();
+    std::cerr << "RuntimeMessage phase: encode limits and invariants" << std::endl;
+    encode_limits_and_invariants();
+    return 0;
+  } catch (const std::exception& error) {
+    allocation_fault::disable();
+    std::cerr << error.what() << std::endl;
+    return 1;
+  }
 }

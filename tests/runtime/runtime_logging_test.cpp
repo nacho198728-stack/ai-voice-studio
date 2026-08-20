@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <iostream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -16,6 +18,19 @@
 #include <ai_voice_runtime/logging.hpp>
 
 #include "jsonl_test_support.hpp"
+
+namespace test_support {
+
+[[noreturn]] void assertion_failed(const char* expression, int line) {
+  throw std::runtime_error(
+      "Runtime logging assertion failed at line " + std::to_string(line) + ": " + expression);
+}
+
+}  // namespace test_support
+
+#undef assert
+#define assert(expression) \
+  ((expression) ? static_cast<void>(0) : test_support::assertion_failed(#expression, __LINE__))
 
 namespace runtime = ai_voice::runtime;
 
@@ -248,12 +263,23 @@ void invalid_message_utf8_is_replaced_before_bounded_jsonl_output() {
 }  // namespace
 
 int main() {
-  assert(!runtime::LoggingPolicy::create(false, runtime::LogLevel::Trace).has_value());
-  assert(!runtime::LoggingPolicy::create(false, runtime::LogLevel::Debug).has_value());
-  assert(!runtime::LoggingPolicy::create(true, static_cast<runtime::LogLevel>(99)).has_value());
-  constrained_json_parser_rejects_non_emitter_grammar();
-  schema_escaping_level_gating_flush_and_repeated_instances_are_isolated();
-  initialization_failure_is_actionable_and_does_not_leave_registered_state();
-  component_utf8_byte_boundaries_are_enforced();
-  invalid_message_utf8_is_replaced_before_bounded_jsonl_output();
+  try {
+    std::cerr << "Runtime logging phase: policy and parser" << std::endl;
+    assert(!runtime::LoggingPolicy::create(false, runtime::LogLevel::Trace).has_value());
+    assert(!runtime::LoggingPolicy::create(false, runtime::LogLevel::Debug).has_value());
+    assert(!runtime::LoggingPolicy::create(true, static_cast<runtime::LogLevel>(99)).has_value());
+    constrained_json_parser_rejects_non_emitter_grammar();
+    std::cerr << "Runtime logging phase: schema, flush, and isolation" << std::endl;
+    schema_escaping_level_gating_flush_and_repeated_instances_are_isolated();
+    std::cerr << "Runtime logging phase: initialization failures" << std::endl;
+    initialization_failure_is_actionable_and_does_not_leave_registered_state();
+    std::cerr << "Runtime logging phase: component UTF-8 boundaries" << std::endl;
+    component_utf8_byte_boundaries_are_enforced();
+    std::cerr << "Runtime logging phase: invalid message UTF-8" << std::endl;
+    invalid_message_utf8_is_replaced_before_bounded_jsonl_output();
+    return 0;
+  } catch (const std::exception& error) {
+    std::cerr << error.what() << std::endl;
+    return 1;
+  }
 }

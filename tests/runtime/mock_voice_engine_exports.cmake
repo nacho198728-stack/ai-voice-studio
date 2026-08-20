@@ -39,7 +39,11 @@ else()
 endif()
 
 if(NOT inspect_result EQUAL 0)
-  message(FATAL_ERROR "Could not inspect Mock VoiceEngine exports: ${inspect_error}")
+  message(FATAL_ERROR
+    "Could not inspect Mock VoiceEngine exports (result=${inspect_result}, "
+    "inspector='${INSPECTOR}', library='${LIBRARY}'). "
+    "stdout='${raw_exports}' stderr='${inspect_error}'"
+  )
 endif()
 if(MSVC_PLATFORM)
   string(REPLACE "\r\n" "\n" raw_exports "${raw_exports}")

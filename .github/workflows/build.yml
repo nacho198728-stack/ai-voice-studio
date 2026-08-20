@@ -180,6 +180,11 @@ jobs:
           node tools/scripts/stage-desktop-native.mjs --profile Release --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+          # Run native gates before the expensive Rust/Tauri compilation so
+          # platform-specific failures return actionable evidence quickly.
+          ctest --preset native-debug --timeout 20
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           cargo +1.97.1 fmt --all -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +1.97.1 check --locked --workspace --all-targets
@@ -197,8 +202,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Remove-Item Env:CARGO_TARGET_DIR
 
-          ctest --preset native-debug
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir build/native-debug --output-on-failure -R "^(aivs_mock_voice_engine_exports|aivs_mock_voice_engine_dynamic_test|aivs_voice_runtime_smoke|aivs_runtime_manager_child_test|aivs_runtime_manager_gate_test|aivs_desktop_exit_runtime_race_test)$"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --preset native-release
