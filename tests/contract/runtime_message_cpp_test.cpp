@@ -340,17 +340,21 @@ void allocation_failures_are_terminal_and_release_resources() {
   };
 
   message::Decoder fixed_storage;
+  std::cerr << "RuntimeMessage allocation point: fixed storage" << std::endl;
   exercise(fixed_storage, body_frame, 0U);
 
   message::Decoder payload_materialization;
+  std::cerr << "RuntimeMessage allocation point: payload materialization" << std::endl;
   exercise(payload_materialization, body_frame, 1U);
 
   message::Decoder first_result_growth;
+  std::cerr << "RuntimeMessage allocation point: first result growth" << std::endl;
   exercise(first_result_growth, body_frame, 2U);
 
   auto two_hellos = hello;
   two_hellos.insert(two_hellos.end(), hello.begin(), hello.end());
   message::Decoder later_result_growth;
+  std::cerr << "RuntimeMessage allocation point: later result growth" << std::endl;
   exercise(later_result_growth, two_hellos, 1U);
 
   later_result_growth.reset();

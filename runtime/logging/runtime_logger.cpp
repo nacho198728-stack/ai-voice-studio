@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <spdlog/logger.h>
+#include <spdlog/pattern_formatter.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_sinks.h>
 
@@ -295,7 +296,8 @@ RuntimeLoggerInitialization RuntimeLogger::initialize(RuntimeLoggingConfig confi
     // handler is instance-owned, non-throwing, and performs no I/O that could
     // recurse into the failing sink or corrupt stdout IPC.
     logger->set_error_handler([](const std::string&) noexcept {});
-    logger->set_pattern("%v");
+    logger->set_formatter(std::make_unique<spdlog::pattern_formatter>(
+        "%v", spdlog::pattern_time_type::local, "\n"));
     logger->set_level(spdlog_level(config.policy.level()));
     return {
         std::unique_ptr<RuntimeLogger>(new RuntimeLogger(std::make_unique<Impl>(

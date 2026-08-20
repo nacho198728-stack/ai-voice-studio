@@ -229,7 +229,7 @@ test("Windows native failures are bounded and run before expensive Rust compilat
     readFile(path.join(repositoryRoot, "tests/CMakeLists.txt"), "utf8"),
     readFile(path.join(repositoryRoot, "tests/runtime/runtime_logging_test.cpp"), "utf8"),
   ]);
-  const nativeGate = workflow.indexOf("ctest --preset native-debug --timeout 20");
+  const nativeGate = workflow.indexOf("ctest --test-dir build/native-debug --output-on-failure --timeout 20");
   const rustCheck = workflow.indexOf("cargo +1.97.1 fmt --all -- --check", nativeGate);
   assert.ok(nativeGate >= 0);
   assert.ok(rustCheck > nativeGate);
@@ -239,4 +239,18 @@ test("Windows native failures are bounded and run before expensive Rust compilat
   );
   assert.match(logging, /Runtime logging phase: initialization failures/u);
   assert.match(logging, /catch \(const std::exception& error\)/u);
+});
+
+test("Windows JSONL and dumpbin discovery are platform deterministic", async () => {
+  const [logger, runtimeTest, cmake] = await Promise.all([
+    readFile(path.join(repositoryRoot, "runtime/logging/runtime_logger.cpp"), "utf8"),
+    readFile(path.join(repositoryRoot, "tests/runtime/runtime_logging_test.cpp"), "utf8"),
+    readFile(path.join(repositoryRoot, "tests/CMakeLists.txt"), "utf8"),
+  ]);
+  assert.match(logger, /pattern_formatter>[\s\S]*"%v"[\s\S]*"\\n"/u);
+  assert.match(runtimeTest, /first\.find\('\\r'\) == std::string::npos/u);
+  assert.match(
+    cmake,
+    /unset\(AIVS_MOCK_EXPORT_INSPECTOR\)[\s\S]*find_program\(AIVS_MOCK_EXPORT_INSPECTOR NAMES dumpbin REQUIRED\)/u,
+  );
 });

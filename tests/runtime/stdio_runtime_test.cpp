@@ -9,8 +9,10 @@
 #include <cstdlib>
 #include <limits>
 #include <new>
+#include <iostream>
 #include <sstream>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -23,6 +25,19 @@
 namespace message = ai_voice::contracts::runtime_message;
 namespace runtime = ai_voice::runtime;
 using ai_voice::contracts::ErrorCode;
+
+namespace test_support {
+
+[[noreturn]] void assertion_failed(const char* expression, int line) {
+  throw std::runtime_error(
+      "stdio runtime assertion failed at line " + std::to_string(line) + ": " + expression);
+}
+
+}  // namespace test_support
+
+#undef assert
+#define assert(expression) \
+  ((expression) ? static_cast<void>(0) : test_support::assertion_failed(#expression, __LINE__))
 
 namespace allocation_fault {
 
@@ -381,12 +396,27 @@ void pipeline_dispatch_allocation_failure_stops_after_the_valid_hello() {
 }  // namespace
 
 int main() {
-  clean_eof_writes_only_one_flushed_hello();
-  partial_reads_and_sticky_commands_stop_after_flushed_shutdown();
-  lifecycle_and_request_logs_are_injected_without_entering_protocol_output();
-  truncated_or_wrong_direction_input_is_a_protocol_exit_without_stdout_diagnostics();
-  stdout_failure_and_input_failure_have_distinct_exits();
-  transport_splits_more_than_one_codec_batch_without_rejecting_valid_sticky_frames();
-  decoder_allocation_failure_is_an_unexpected_process_failure();
-  pipeline_dispatch_allocation_failure_stops_after_the_valid_hello();
+  try {
+    std::cerr << "stdio runtime phase: clean EOF" << std::endl;
+    clean_eof_writes_only_one_flushed_hello();
+    std::cerr << "stdio runtime phase: partial reads and shutdown" << std::endl;
+    partial_reads_and_sticky_commands_stop_after_flushed_shutdown();
+    std::cerr << "stdio runtime phase: injected logging" << std::endl;
+    lifecycle_and_request_logs_are_injected_without_entering_protocol_output();
+    std::cerr << "stdio runtime phase: invalid input" << std::endl;
+    truncated_or_wrong_direction_input_is_a_protocol_exit_without_stdout_diagnostics();
+    std::cerr << "stdio runtime phase: transport failures" << std::endl;
+    stdout_failure_and_input_failure_have_distinct_exits();
+    std::cerr << "stdio runtime phase: codec batches" << std::endl;
+    transport_splits_more_than_one_codec_batch_without_rejecting_valid_sticky_frames();
+    std::cerr << "stdio runtime phase: decoder allocation failure" << std::endl;
+    decoder_allocation_failure_is_an_unexpected_process_failure();
+    std::cerr << "stdio runtime phase: pipeline allocation failure" << std::endl;
+    pipeline_dispatch_allocation_failure_stops_after_the_valid_hello();
+    return 0;
+  } catch (const std::exception& error) {
+    allocation_fault::disable();
+    std::cerr << error.what() << std::endl;
+    return 1;
+  }
 }

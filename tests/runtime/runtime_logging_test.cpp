@@ -102,6 +102,7 @@ void schema_escaping_level_gating_flush_and_repeated_instances_are_isolated() {
 
   const auto path = directory / runtime::kRuntimeLogFileName;
   const auto first = read_file(path);
+  assert(first.find('\r') == std::string::npos);
   assert_jsonl_schema(first, 1U);
   assert(first.ends_with('\n'));
   assert(first.find('\n') == first.size() - 1U);
