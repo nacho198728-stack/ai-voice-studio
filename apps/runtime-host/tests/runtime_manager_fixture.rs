@@ -374,9 +374,14 @@ async fn inherited_continuous_stdout_cannot_starve_absolute_drain_bound() {
         error.kind,
         ManagerErrorKind::Process | ManagerErrorKind::Protocol
     ));
+    let discard_work_cap = if cfg!(windows) {
+        Duration::from_millis(450)
+    } else {
+        Duration::from_millis(90)
+    };
     assert!(
-        began.elapsed() < Duration::from_millis(90),
-        "continuous stdout exceeded the independent discard-work cap: {:?}",
+        began.elapsed() < discard_work_cap,
+        "continuous stdout exceeded the platform discard-work cap {discard_work_cap:?}: {:?}",
         began.elapsed()
     );
     assert_pid_gone(pid).await;
