@@ -265,16 +265,16 @@ fn invalid_target_triples_and_missing_artifacts_return_actionable_public_errors(
 fn manager_config_is_derived_from_validated_product_and_resolved_artifacts() {
     let product =
         ProductConfig::load_from_bytes(include_bytes!("../../../../config/config.json")).unwrap();
+    let root = std::env::temp_dir().join("AI Voice Studio 配置测试");
     let paths = NativeArtifactPaths {
-        runtime: PathBuf::from("/Applications/AI Voice Studio.app/Contents/MacOS/voice-runtime"),
-        plugin: PathBuf::from(
-            "/Applications/AI Voice Studio.app/Contents/Resources/native/aivs_mock_voice_engine-aarch64-apple-darwin.dylib",
-        ),
-        config: PathBuf::from(
-            "/Applications/AI Voice Studio.app/Contents/Resources/config/config.json",
-        ),
+        runtime: root.join("runtime/voice-runtime"),
+        plugin: root.join("native/aivs_mock_voice_engine"),
+        config: root.join("config/config.json"),
     };
-    let app_data = PathBuf::from("/Users/tester/Library/Application Support/AI Voice Studio");
+    let app_data = root.join("app-data");
+
+    assert!(paths.runtime.is_absolute());
+    assert!(app_data.is_absolute());
 
     let config = build_manager_config(&product, &paths, &app_data).unwrap();
 
