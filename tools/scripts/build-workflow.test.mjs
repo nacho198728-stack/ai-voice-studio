@@ -204,3 +204,20 @@ test("Rust configuration tests mutate parsed JSON instead of checkout-specific t
   assert.match(source, /document\["debug"\]\["log_level"\]/u);
   assert.doesNotMatch(source, /include_str!\([^)]*config\.json[^)]*\)[\s\S]*?\.replace/u);
 });
+
+test("native RuntimeMessage diagnostics fail closed without a Windows assertion dialog", async () => {
+  const [cmake, source] = await Promise.all([
+    readFile(path.join(repositoryRoot, "tests/CMakeLists.txt"), "utf8"),
+    readFile(
+      path.join(repositoryRoot, "tests/contract/runtime_message_cpp_test.cpp"),
+      "utf8",
+    ),
+  ]);
+  assert.match(
+    cmake,
+    /set_tests_properties\(aivs_runtime_message_cpp_test PROPERTIES TIMEOUT 20\)/u,
+  );
+  assert.match(source, /_set_error_mode\(_OUT_TO_STDERR\)/u);
+  assert.match(source, /RuntimeMessage fixture could not be opened/u);
+  assert.match(source, /RuntimeMessage phase: chunking, sticky failure, and EOF/u);
+});

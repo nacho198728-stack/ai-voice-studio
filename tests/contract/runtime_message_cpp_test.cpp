@@ -6,13 +6,19 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <new>
 #include <span>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <stdlib.h>
+#endif
 
 #include <ai_voice_contracts/runtime_message.hpp>
 
@@ -74,7 +80,9 @@ namespace {
 
 std::vector<std::uint8_t> fixture_named(const std::string& name) {
   std::ifstream input(std::string(AIVS_RUNTIME_MESSAGE_FIXTURE_DIRECTORY) + "/" + name);
-  assert(input.good());
+  if (!input.good()) {
+    throw std::runtime_error("RuntimeMessage fixture could not be opened: " + name);
+  }
   std::vector<std::uint8_t> bytes;
   std::string token;
   while (input >> token) {
@@ -476,12 +484,22 @@ void encode_limits_and_invariants() {
 }  // namespace
 
 int main() {
+#ifdef _WIN32
+  _set_error_mode(_OUT_TO_STDERR);
+#endif
+  std::cerr << "RuntimeMessage phase: shared fixture and round trip" << std::endl;
   shared_fixture_and_round_trip();
+  std::cerr << "RuntimeMessage phase: literal kinds and commands" << std::endl;
   all_literal_kinds_and_commands();
+  std::cerr << "RuntimeMessage phase: chunking, sticky failure, and EOF" << std::endl;
   chunking_sticky_and_eof();
+  std::cerr << "RuntimeMessage phase: bounded feed resources" << std::endl;
   bounded_feed_resources();
+  std::cerr << "RuntimeMessage phase: allocation failures" << std::endl;
   allocation_failures_are_terminal_and_release_resources();
+  std::cerr << "RuntimeMessage phase: malformed and failed state" << std::endl;
   malformed_and_failed_state();
+  std::cerr << "RuntimeMessage phase: encode limits and invariants" << std::endl;
   encode_limits_and_invariants();
   return 0;
 }

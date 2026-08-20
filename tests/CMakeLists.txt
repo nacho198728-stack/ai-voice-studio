@@ -11,6 +11,7 @@ target_compile_definitions(
     AIVS_RUNTIME_MESSAGE_FIXTURE_DIRECTORY="${PROJECT_SOURCE_DIR}/core/contracts/fixtures"
 )
 add_test(NAME aivs_runtime_message_cpp_test COMMAND aivs_runtime_message_cpp_test)
+set_tests_properties(aivs_runtime_message_cpp_test PROPERTIES TIMEOUT 20)
 
 add_executable(aivs_voice_engine_c_abi_c_test contract/voice_engine_c_abi_c_test.c)
 target_link_libraries(aivs_voice_engine_c_abi_c_test PRIVATE ai_voice::voice_engine_abi)
