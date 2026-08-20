@@ -254,3 +254,15 @@ test("Windows JSONL and dumpbin discovery are platform deterministic", async () 
     /unset\(AIVS_MOCK_EXPORT_INSPECTOR\)[\s\S]*find_program\(AIVS_MOCK_EXPORT_INSPECTOR NAMES dumpbin REQUIRED\)/u,
   );
 });
+
+test("MSVC skips only the non-deterministic process-wide allocation interception", async () => {
+  const [messageTest, stdioTest] = await Promise.all([
+    readFile(path.join(repositoryRoot, "tests/contract/runtime_message_cpp_test.cpp"), "utf8"),
+    readFile(path.join(repositoryRoot, "tests/runtime/stdio_runtime_test.cpp"), "utf8"),
+  ]);
+  for (const source of [messageTest, stdioTest]) {
+    assert.match(source, /#ifndef _WIN32\nvoid\* operator new/u);
+    assert.match(source, /allocation injection: skipped on MSVC/u);
+    assert.match(source, /#ifndef _WIN32[\s\S]*allocation_fail/u);
+  }
+});

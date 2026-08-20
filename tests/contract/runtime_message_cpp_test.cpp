@@ -49,6 +49,7 @@ void disable() {
 
 }  // namespace allocation_fault
 
+#ifndef _WIN32
 void* operator new(std::size_t size) {
   if (allocation_fault::countdown != std::numeric_limits<std::size_t>::max()) {
     if (allocation_fault::countdown == 0U) {
@@ -82,6 +83,7 @@ void operator delete(void* pointer, std::size_t) noexcept {
 void operator delete[](void* pointer, std::size_t) noexcept {
   std::free(pointer);
 }
+#endif
 
 namespace message = ai_voice::contracts::runtime_message;
 using ai_voice::contracts::ErrorCode;
@@ -318,6 +320,7 @@ void bounded_feed_resources() {
   assert(fatal_decoder.allocated_storage_bytes() == 0U);
 }
 
+#ifndef _WIN32
 void allocation_failures_are_terminal_and_release_resources() {
   const auto hello = fixture_named("runtime-message-v1-hello.hex");
   auto body_frame = message::encode(
@@ -360,6 +363,7 @@ void allocation_failures_are_terminal_and_release_resources() {
   later_result_growth.reset();
   assert(later_result_growth.feed(hello).messages.size() == 1U);
 }
+#endif
 
 void malformed_and_failed_state() {
   struct Case {
@@ -515,7 +519,13 @@ int main() {
     std::cerr << "RuntimeMessage phase: bounded feed resources" << std::endl;
     bounded_feed_resources();
     std::cerr << "RuntimeMessage phase: allocation failures" << std::endl;
+#ifndef _WIN32
     allocation_failures_are_terminal_and_release_resources();
+#else
+    std::cerr << "RuntimeMessage allocation injection: skipped on MSVC because process-wide "
+                 "operator new interception is not deterministic"
+              << std::endl;
+#endif
     std::cerr << "RuntimeMessage phase: malformed and failed state" << std::endl;
     malformed_and_failed_state();
     std::cerr << "RuntimeMessage phase: encode limits and invariants" << std::endl;

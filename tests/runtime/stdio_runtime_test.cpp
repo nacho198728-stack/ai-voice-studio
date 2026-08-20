@@ -53,6 +53,7 @@ void disable() {
 
 }  // namespace allocation_fault
 
+#ifndef _WIN32
 void* operator new(std::size_t size) {
   if (allocation_fault::countdown != std::numeric_limits<std::size_t>::max()) {
     if (allocation_fault::countdown == 0U) {
@@ -86,6 +87,7 @@ void operator delete(void* pointer, std::size_t) noexcept {
 void operator delete[](void* pointer, std::size_t) noexcept {
   std::free(pointer);
 }
+#endif
 
 namespace {
 
@@ -121,6 +123,7 @@ class ErrorReader final : public runtime::ByteReader {
   }
 };
 
+#ifndef _WIN32
 class AllocationFailureReader final : public runtime::ByteReader {
  public:
   explicit AllocationFailureReader(std::vector<std::uint8_t> bytes) : bytes_(std::move(bytes)) {}
@@ -168,6 +171,7 @@ class AllocationFailurePipeline final : public runtime::PipelineService {
     return {ErrorCode::Success, std::vector<std::uint8_t>(1U, 0xA5U)};
   }
 };
+#endif
 
 struct CapturedLog {
   runtime::LogLevel level;
@@ -367,6 +371,7 @@ void transport_splits_more_than_one_codec_batch_without_rejecting_valid_sticky_f
   assert(diagnostics.str().empty());
 }
 
+#ifndef _WIN32
 void decoder_allocation_failure_is_an_unexpected_process_failure() {
   AllocationFailureReader input(encode_frame(request(1U, message::Command::Ping, {'x'})));
   MemoryWriter output;
@@ -392,6 +397,7 @@ void pipeline_dispatch_allocation_failure_stops_after_the_valid_hello() {
   assert(!diagnostics.str().empty());
   assert(diagnostics.str().size() <= 513U);
 }
+#endif
 
 }  // namespace
 
@@ -410,9 +416,15 @@ int main() {
     std::cerr << "stdio runtime phase: codec batches" << std::endl;
     transport_splits_more_than_one_codec_batch_without_rejecting_valid_sticky_frames();
     std::cerr << "stdio runtime phase: decoder allocation failure" << std::endl;
+#ifndef _WIN32
     decoder_allocation_failure_is_an_unexpected_process_failure();
     std::cerr << "stdio runtime phase: pipeline allocation failure" << std::endl;
     pipeline_dispatch_allocation_failure_stops_after_the_valid_hello();
+#else
+    std::cerr << "stdio runtime allocation injection: skipped on MSVC because process-wide "
+                 "operator new interception is not deterministic"
+              << std::endl;
+#endif
     return 0;
   } catch (const std::exception& error) {
     allocation_fault::disable();
