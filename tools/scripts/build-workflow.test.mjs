@@ -154,3 +154,24 @@ test("platform jobs fail closed on architecture and exercise native Tauri layout
     "the clean Windows Tauri build requires a real ICO resource",
   );
 });
+
+test("Windows Tauri tests embed the Common Controls v6 application manifest", async () => {
+  const buildScript = await readFile(
+    path.join(repositoryRoot, "apps/desktop/src-tauri/build.rs"),
+    "utf8",
+  );
+  const manifest = await readFile(
+    path.join(repositoryRoot, "apps/desktop/src-tauri/windows-app-manifest.xml"),
+    "utf8",
+  );
+
+  assert.match(buildScript, /WindowsAttributes::new_without_app_manifest\(\)/u);
+  assert.match(buildScript, /CARGO_CFG_TARGET_OS/u);
+  assert.match(buildScript, /CARGO_CFG_TARGET_ENV/u);
+  assert.match(buildScript, /cargo:rustc-link-arg=\/MANIFEST:EMBED/u);
+  assert.match(buildScript, /cargo:rustc-link-arg=\/MANIFESTINPUT:/u);
+  assert.match(buildScript, /cargo:rustc-link-arg=\/WX/u);
+  assert.match(manifest, /name="Microsoft\.Windows\.Common-Controls"/u);
+  assert.match(manifest, /version="6\.0\.0\.0"/u);
+  assert.match(manifest, /publicKeyToken="6595b64144ccf1df"/u);
+});
