@@ -94,13 +94,20 @@ test("both jobs build and stage native artifacts, warm Rust, then execute CTest"
     const nativeBuildIndex = run.indexOf("cmake --build --preset native-release");
     const stageIndex = run.indexOf("stage-desktop-native.mjs --profile Release");
     const rustCheckIndex = run.indexOf("cargo +1.97.1 check --locked --workspace --all-targets");
+    const ctestWarmupIndex = run.indexOf("cargo +1.97.1 test --locked --workspace --no-run");
     const nativeTestIndex = run.indexOf("ctest --preset native-release");
     assert.notEqual(nativeBuildIndex, -1);
     assert.notEqual(stageIndex, -1);
     assert.notEqual(rustCheckIndex, -1);
+    assert.notEqual(ctestWarmupIndex, -1);
     assert.notEqual(nativeTestIndex, -1);
+    assert.match(run, /build\/native-debug\/rust-target/u);
+    assert.match(run, /build\/native-release\/rust-target/u);
     assert.ok(
-      nativeBuildIndex < stageIndex && stageIndex < rustCheckIndex && rustCheckIndex < nativeTestIndex,
+      nativeBuildIndex < stageIndex
+        && stageIndex < rustCheckIndex
+        && rustCheckIndex < ctestWarmupIndex
+        && ctestWarmupIndex < nativeTestIndex,
       "native binaries must be staged before Cargo, while Cargo must warm fixture tests before CTest",
     );
   }

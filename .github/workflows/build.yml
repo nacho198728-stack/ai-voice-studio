@@ -79,6 +79,8 @@ jobs:
           cargo +1.97.1 check --locked --workspace --all-targets
           cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings
           cargo +1.97.1 test --locked --workspace
+          CARGO_TARGET_DIR=build/native-debug/rust-target cargo +1.97.1 test --locked --workspace --no-run
+          CARGO_TARGET_DIR=build/native-release/rust-target cargo +1.97.1 test --locked --workspace --no-run
 
       - name: Test native Debug and Release after Rust warmup
         shell: bash
@@ -186,6 +188,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +1.97.1 test --locked --workspace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $env:CARGO_TARGET_DIR = "build/native-debug/rust-target"
+          cargo +1.97.1 test --locked --workspace --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:CARGO_TARGET_DIR = "build/native-release/rust-target"
+          cargo +1.97.1 test --locked --workspace --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:CARGO_TARGET_DIR
 
           ctest --preset native-debug
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

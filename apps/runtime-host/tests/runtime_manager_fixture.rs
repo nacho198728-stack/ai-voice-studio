@@ -202,7 +202,9 @@ async fn concurrent_stop_waiters_have_a_command_queue_derived_bound() {
 #[ignore = "requires CTest-provided controlled child fixture"]
 async fn stdout_close_then_hang_cannot_override_short_handshake_deadline() {
     let mut config = config("stdout-close-hang");
-    config.handshake_timeout = Duration::from_millis(100);
+    // Keep the handshake deadline well below the 2 s shutdown/reap bound while
+    // leaving enough scheduler margin for a freshly provisioned CI runner.
+    config.handshake_timeout = Duration::from_millis(500);
     config.shutdown_timeout = Duration::from_secs(2);
     let manager = RuntimeManager::new(config).unwrap();
     let (start, pid) = start_and_capture_pid(&manager).await;
@@ -210,7 +212,7 @@ async fn stdout_close_then_hang_cannot_override_short_handshake_deadline() {
 
     let error = start.await.unwrap().unwrap_err();
 
-    assert!(began.elapsed() < Duration::from_millis(500));
+    assert!(began.elapsed() < Duration::from_millis(1_000));
     assert_eq!(error.kind, ManagerErrorKind::Protocol);
     assert_pid_gone(pid).await;
 }

@@ -34,7 +34,7 @@ function passingResponses({ nodeVersion = '24.16.0', pnpmVersion = '11.19.0', ru
   return {
     'node --version': { found: true, stdout: `v${nodeVersion}\n`, stderr: '', exitCode: 0 },
     'pnpm --version': { found: true, stdout: `${pnpmVersion}\n`, stderr: '', exitCode: 0 },
-    'pnpm.cmd --version': { found: true, stdout: `${pnpmVersion}\n`, stderr: '', exitCode: 0 },
+    'cmd.exe /d /s /c pnpm --version': { found: true, stdout: `${pnpmVersion}\n`, stderr: '', exitCode: 0 },
     'rustup --version': { found: true, stdout: 'rustup 1.29.0\n', stderr: '', exitCode: 0 },
     [`rustup which --toolchain ${rustVersion} rustc`]: { found: true, stdout: `${toolchainPath}/rustc\n`, stderr: '', exitCode: 0 },
     [`rustup which --toolchain ${rustVersion} cargo`]: { found: true, stdout: `${toolchainPath}/cargo\n`, stderr: '', exitCode: 0 },
@@ -88,10 +88,14 @@ test('uses the documented MSVC usage outcome but rejects unrelated nonzero exits
   const normalReport = runDoctor({ platform: 'win32', runCommand: normalProbe.runCommand });
   assert.equal(normalReport.exitCode, 0);
   assert.equal(normalReport.checks.at(-1).status, 'pass');
-  assert.equal(
-    normalProbe.invocations.find(({ command }) => command.startsWith('pnpm'))?.command,
-    'pnpm.cmd',
-    'Windows must probe the Corepack command shim that spawnSync can execute without a shell',
+  assert.deepEqual(
+    normalProbe.invocations.find(({ command, args }) => args.includes('pnpm --version')),
+    {
+      command: 'cmd.exe',
+      args: ['/d', '/s', '/c', 'pnpm --version'],
+      options: { environment: { COREPACK_ENABLE_NETWORK: '0' } },
+    },
+    'Windows must resolve the Corepack command shim through the native command processor',
   );
 
   const failedProbe = probeFrom({

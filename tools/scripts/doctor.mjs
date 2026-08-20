@@ -163,10 +163,12 @@ export function runDoctor({
 } = {}) {
   const resolvedDeclarations = declarations ?? readDeclarations(targetRepositoryRoot);
   const rustupEnvironment = { RUSTUP_AUTO_INSTALL: '0' };
-  const pnpmCommand = platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const pnpmProbe = platform === 'win32'
+    ? { command: 'cmd.exe', args: ['/d', '/s', '/c', 'pnpm --version'] }
+    : { command: 'pnpm', args: ['--version'] };
   const checks = [
     checkTool({ id: 'node', label: 'Node.js', command: 'node', args: ['--version'], expectedVersion: resolvedDeclarations.nodeVersion, runCommand }),
-    checkTool({ id: 'pnpm', label: 'pnpm', command: pnpmCommand, args: ['--version'], expectedVersion: resolvedDeclarations.pnpmVersion, environment: { COREPACK_ENABLE_NETWORK: '0' }, runCommand }),
+    checkTool({ id: 'pnpm', label: 'pnpm', ...pnpmProbe, expectedVersion: resolvedDeclarations.pnpmVersion, environment: { COREPACK_ENABLE_NETWORK: '0' }, runCommand }),
     checkTool({ id: 'rustup', label: 'rustup', command: 'rustup', args: ['--version'], environment: rustupEnvironment, runCommand }),
     checkRustBinary({ id: 'rustc', label: 'rustc', binary: 'rustc', channel: resolvedDeclarations.rustChannel, runCommand }),
     checkRustBinary({ id: 'cargo', label: 'Cargo', binary: 'cargo', channel: resolvedDeclarations.rustChannel, runCommand }),
