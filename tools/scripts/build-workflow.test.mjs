@@ -175,3 +175,21 @@ test("Windows Tauri tests embed the Common Controls v6 application manifest", as
   assert.match(manifest, /version="6\.0\.0\.0"/u);
   assert.match(manifest, /publicKeyToken="6595b64144ccf1df"/u);
 });
+
+test("Tauri mock IPC uses the platform-native packaged origin", async () => {
+  const support = await readFile(
+    path.join(repositoryRoot, "apps/desktop/src-tauri/tests/support/mod.rs"),
+    "utf8",
+  );
+  assert.match(support, /cfg!\(windows\).*http:\/\/tauri\.localhost/su);
+  assert.match(support, /tauri:\/\/localhost/u);
+
+  for (const fixture of ["command_ipc.rs", "native_command_service.rs"]) {
+    const source = await readFile(
+      path.join(repositoryRoot, "apps/desktop/src-tauri/tests", fixture),
+      "utf8",
+    );
+    assert.match(source, /packaged_invoke_url\(\)/u);
+    assert.doesNotMatch(source, /url: "tauri:\/\/localhost"/u);
+  }
+});

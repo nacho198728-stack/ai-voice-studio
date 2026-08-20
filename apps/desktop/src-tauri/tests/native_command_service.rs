@@ -11,6 +11,9 @@ use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop
 use tauri::utils::config::WindowConfig;
 use tauri::webview::InvokeRequest;
 
+mod support;
+use support::packaged_invoke_url;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tools/scripts/stage-desktop-native.mjs output"]
 async fn staged_tauri_invoke_runs_the_real_runtime_c_abi_mock_chain_and_reaps() {
@@ -111,7 +114,7 @@ fn invoke(
             cmd: command.into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
+            url: packaged_invoke_url(),
             body,
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_owned(),

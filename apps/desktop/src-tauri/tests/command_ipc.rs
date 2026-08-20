@@ -9,6 +9,9 @@ use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop
 use tauri::utils::config::WindowConfig;
 use tauri::webview::InvokeRequest;
 
+mod support;
+use support::packaged_invoke_url;
+
 #[derive(Clone)]
 struct LifecycleFake {
     state: Arc<Mutex<&'static str>>,
@@ -152,7 +155,7 @@ fn invoke_body(
             cmd: command.into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
+            url: packaged_invoke_url(),
             body,
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_owned(),
