@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
