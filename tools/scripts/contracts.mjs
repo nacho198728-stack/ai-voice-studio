@@ -676,9 +676,16 @@ function outputsFor(root) {
   ];
 }
 
+function generatedTextMatches(actual, expected) {
+  return actual.replaceAll("\r\n", "\n") === expected;
+}
+
 function generate(root) {
   for (const output of outputsFor(root)) {
-    if (!existsSync(output.path) || readFileSync(output.path, "utf8") !== output.contents) {
+    if (
+      !existsSync(output.path)
+      || !generatedTextMatches(readFileSync(output.path, "utf8"), output.contents)
+    ) {
       mkdirSync(path.dirname(output.path), { recursive: true });
       writeFileSync(output.path, output.contents);
       process.stdout.write(`generated ${path.relative(root, output.path)}\n`);
@@ -688,7 +695,10 @@ function generate(root) {
 
 function check(root) {
   for (const output of outputsFor(root)) {
-    if (!existsSync(output.path) || readFileSync(output.path, "utf8") !== output.contents) {
+    if (
+      !existsSync(output.path)
+      || !generatedTextMatches(readFileSync(output.path, "utf8"), output.contents)
+    ) {
       fail(`generated mapping drift: ${path.relative(root, output.path)}; run pnpm contracts:generate`);
     }
   }

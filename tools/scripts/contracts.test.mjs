@@ -101,6 +101,14 @@ function runFailure(root, mode) {
   }
 }
 
+function runGit(root, args) {
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
 function fixture(t, options) {
   const root = mkdtempSync(path.join(os.tmpdir(), "aivs-contracts-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -144,6 +152,22 @@ test("generate produces repeatable mappings accepted by read-only check", (t) =>
   assert.match(firstRuntimeCpp, /kMaxControlPayloadBytes = 65536U/);
   assert.match(firstRuntimeCpp, /kMaxInputBytesPerFeed = 65568U/);
   assert.match(firstRuntimeCpp, /kPolicies/);
+});
+
+test("generated mappings survive a Windows-style Git checkout without false drift", (t) => {
+  const root = fixture(t);
+  run(root, "generate");
+  runGit(root, ["init"]);
+  runGit(root, ["config", "user.name", "Contract Test"]);
+  runGit(root, ["config", "user.email", "contract-test@example.invalid"]);
+  runGit(root, ["add", "."]);
+  runGit(root, ["commit", "-m", "fixture"]);
+
+  const checkout = mkdtempSync(path.join(os.tmpdir(), "aivs-contracts-windows-checkout-"));
+  t.after(() => rmSync(checkout, { recursive: true, force: true }));
+  runGit(root, ["-c", "core.autocrlf=true", "clone", "--quiet", root, checkout]);
+
+  assert.doesNotThrow(() => run(checkout, "check"));
 });
 
 test("check rejects malformed RuntimeMessage layout and limits", (t) => {
