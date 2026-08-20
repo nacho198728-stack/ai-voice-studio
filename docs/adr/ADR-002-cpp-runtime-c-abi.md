@@ -64,7 +64,7 @@ work, and unique exports are verified without introducing AI or audio devices.
 | Target | Evidence status |
 | --- | --- |
 | macOS arm64 | The real dynamic library, C ABI pipeline, process integration, and Debug/Release tests have executed locally. |
-| Windows x64 | Source/config/fixture only; real Windows execution is pending Task 18 and not accepted. |
+| Windows x64 | Accepted: real GitHub-hosted Windows x64/MSVC workflow passed Task 18. |
 
 ## Alternatives considered
 
@@ -95,8 +95,8 @@ open devices or accept ADR-003 early.
 - Rust and Tauri never load, store, or dereference a VoiceEngine library or
   handle; only `voice-runtime` does so.
 - Runtime and plugins have one source contract plus macOS/Windows build and CI
-  paths. Only macOS has executed the real dynamic ABI gate locally; Windows
-  remains source/config/fixture coverage pending the Task 18 runner gate.
+  paths. macOS executed locally and both hosted platform jobs passed; Windows
+  is covered by the accepted Task 18 real runner gate.
 - ABI evolution is append-only. Existing fields, operations, versions, and
   canonical error values cannot be silently reinterpreted.
 - The plugin owns its opaque handle; callers own all strings, PCM, and output

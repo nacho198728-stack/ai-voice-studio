@@ -6,8 +6,8 @@ Phase 0.5 implements an offline desktop control plane, an isolated native
 Runtime, a stable plugin boundary, and a deterministic Mock VoiceEngine used by
 contract, integration, and benchmark gates. It proves lifecycle and data-plane
 boundaries without implementing product audio or inference. Windows x64 support
-is encoded in build and fixture paths, but real Windows execution is pending
-and not accepted until the checked-in CI workflow runs on a GitHub runner.
+is validated by the successful real GitHub-hosted runner recorded in the Phase
+0.5 acceptance report.
 
 The implemented control chain is:
 

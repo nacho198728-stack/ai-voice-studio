@@ -70,9 +70,9 @@ function tableAfterHeading(markdown, heading) {
   return rows;
 }
 
-function assertUncheckedPlanTask(planMarkdown, marker, task) {
+function assertCheckedPlanTask(planMarkdown, marker, task) {
   const line = planMarkdown.split(/\r?\n/u).find((candidate) => candidate.includes(marker));
-  if (!line?.startsWith("- [ ] ")) throw new Error(`Task ${task} must remain unchecked`);
+  if (!line?.startsWith("- [x] ")) throw new Error(`Task ${task} must be checked`);
 }
 
 function same(left, right) {
@@ -285,21 +285,18 @@ export function validatePhase05Acceptance({
   declaredVersions,
 }) {
   if (!path.isAbsolute(repositoryRoot)) throw new Error("repository root must be absolute");
-  if (/Phase\s+0\.5\s+complete/iu.test(markdown)) {
-    throw new Error("acceptance report must not claim the blocked phase is complete");
-  }
-  assertUncheckedPlanTask(planMarkdown, "在 `.github/workflows/build.yml`", 18);
-  assertUncheckedPlanTask(planMarkdown, "执行 Phase 0.5 最终验收", 20);
+  assertCheckedPlanTask(planMarkdown, "在 `.github/workflows/build.yml`", 18);
+  assertCheckedPlanTask(planMarkdown, "执行 Phase 0.5 最终验收", 20);
   assertManifestShape(manifest, declaredVersions);
 
   const statusRows = new Map(
     tableAfterHeading(markdown, "## Gate status").map((row) => [row[0], row[1]]),
   );
-  if (statusRows.get("Overall") !== "PENDING") {
-    throw new Error("overall acceptance status must be PENDING");
+  if (statusRows.get("Overall") !== "PASS") {
+    throw new Error("overall acceptance status must be PASS");
   }
-  if (statusRows.get("Only blocker") !== "Real Windows x64 workflow run") {
-    throw new Error("the sole blocker must be the real Windows x64 workflow run");
+  if (statusRows.get("Only blocker") !== "None") {
+    throw new Error("completed acceptance must have no blocker");
   }
   const evidenceRoot = statusRows.get("Local repository root");
   if (!evidenceRoot?.startsWith("/") || path.posix.normalize(evidenceRoot) !== evidenceRoot) {
@@ -316,7 +313,7 @@ export function validatePhase05Acceptance({
     throw new Error("verification matrix must cover the exact 13 Phase 0.5 requirements");
   }
   for (const row of matrix) {
-    if (row.length !== 5 || !row[1] || row[2] !== "PASS" || !row[3] || row[4] !== "PENDING") {
+    if (row.length !== 5 || !row[1] || row[2] !== "PASS" || !row[3] || row[4] !== "PASS") {
       throw new Error(`verification matrix row ${row[0]} has invalid evidence or status`);
     }
   }
@@ -325,10 +322,11 @@ export function validatePhase05Acceptance({
   const windows = windowsRows.find((row) => row[0] === "Windows x64");
   if (
     windows?.length !== 3 ||
-    windows[1] !== "PENDING" ||
-    windows[2] !== "PENDING — no run URL available"
+    windows[1] !== "PASS" ||
+    windows[2] !==
+      "https://github.com/nacho198728-stack/ai-voice-studio/actions/runs/32361978210/job/96403295911"
   ) {
-    throw new Error("Windows x64 evidence must remain pending without a fabricated URL");
+    throw new Error("Windows x64 evidence URL must match the successful real job");
   }
 
   const artifacts = tableAfterHeading(markdown, "## Release bundle artifacts");
@@ -398,8 +396,8 @@ export function validatePhase05Acceptance({
     if (!markdown.includes(heading)) throw new Error(`acceptance report is missing ${heading}`);
   }
   return {
-    status: "PENDING",
-    windowsEvidenceUrl: null,
+    status: "PASS",
+    windowsEvidenceUrl: windows[2],
     requirementCount: matrix.length,
     artifactCount: artifacts.length,
   };

@@ -1,9 +1,8 @@
-# Phase 0.5 acceptance evidence draft
+# Phase 0.5 acceptance evidence
 
-This document records fresh local macOS arm64 evidence gathered on 2026-08-20.
-It is an acceptance draft, not a cross-platform sign-off. The checked-in
-[build workflow](../../.github/workflows/build.yml) has no real Windows run
-because this repository has no Git remote.
+This document records local macOS arm64 evidence and successful real Windows
+x64 GitHub-hosted runner evidence gathered on 2026-08-20. It is the
+cross-platform Phase 0.5 sign-off.
 The durable local package record is the generated
 [acceptance evidence manifest](PHASE-0.5-ACCEPTANCE-EVIDENCE.json).
 
@@ -11,30 +10,30 @@ The durable local package record is the generated
 
 | Field | Value |
 | --- | --- |
-| Overall | PENDING |
-| Only blocker | Real Windows x64 workflow run |
+| Overall | PASS |
+| Only blocker | None |
 | Local host | macOS 26.5.2 build 25F84, arm64 |
 | Local repository root | /Users/alex/Documents/ChatGPT/AI翻唱 |
 | Evidence date | 2026-08-20 Asia/Shanghai |
-| Plan state | Task 18 and Task 20 intentionally remain unchecked |
+| Plan state | Task 18 and Task 20 complete |
 
 ## Verification matrix
 
 | ID | Requirement | macOS arm64 | Fresh local evidence | Windows x64 |
 | --- | --- | --- | --- | --- |
-| MONO | Repository is the planned monorepo and preserves the V1.0 documents | PASS | Tracked-tree audit, all prior task reports, and final diff scope review | PENDING |
-| CROSS | CMake, Cargo, frontend, and Tauri gates have clean cross-platform paths | PASS | Frozen install, both native presets, locked Rust, frontend build, workflow fixtures, and arm64 bundle build | PENDING |
-| UI | Desktop exposes the bounded Runtime states and five control operations | PASS | Frontend 8/8, lint, typecheck, Vite build, real rebuilt app launch and clean quit; screen lock prevented a fresh visual inspection | PENDING |
-| PROC | RuntimeManager starts, handshakes, queries, stops, recovers, and reaps | PASS | Debug and Release process CTests 25/25 plus RuntimeManager gate repeated three times per profile | PENDING |
-| IPC | Framing, bounds, correlation, command, and version errors are deterministic | PASS | JS contract 6/6, Rust protocol 17/17, native contract and hostile-process CTests | PENDING |
-| MOCK | Runtime dynamically loads the Mock through C ABI and returns a fixed checksum | PASS | Native CTest plus staged Tauri invoke integration reached handshake, Mock command, ordered shutdown, and reap | PENDING |
-| ABI | C and C++20 consume the versioned caller-owned C ABI contract | PASS | Debug and Release C/C++ ABI, layout, scalar-drift, export, and dynamic-loader gates | PENDING |
-| PCM | PCM remains native-only; IPC and UI receive only a bounded summary | PASS | Mock pipeline wire result remains the fixed 80-byte summary; contract and desktop tests reject payload drift | PENDING |
-| LOG | Structured Rust/C++ logs cannot corrupt stdout IPC or log per frame | PASS | Telemetry, native logging, stderr flood, stdout framing, and no-hot-path-log gates passed | PENDING |
-| CONFIG | Strict config and capability semantics fail closed with actionable errors | PASS | Config 6/6, capability 2/2, staging, bundle, and native startup evidence | PENDING |
-| TEST | Contract, Runtime, benchmark, frontend, Rust, and build gates pass | PASS | Full suites passed; benchmark repeated 10 times per native profile with 20-second test deadlines | PENDING |
-| ADR | ADR-000/001/002 match implementation and the next ADR number remains reserved | PASS | Documentation contract 8/8 and repository filename audit | PENDING |
-| EXCL | No Python, PyTorch, CUDA, ONNX Runtime, model payload, cloud/account/player, or real audio-device integration exists | PASS | Dependency closure, CMake link graph, exact package inventory, Mach-O dependency and symbol audits described below | PENDING |
+| MONO | Repository is the planned monorepo and preserves the V1.0 documents | PASS | Tracked-tree audit, all prior task reports, and final diff scope review | PASS |
+| CROSS | CMake, Cargo, frontend, and Tauri gates have clean cross-platform paths | PASS | Frozen install, both native presets, locked Rust, frontend build, workflow fixtures, and arm64 bundle build | PASS |
+| UI | Desktop exposes the bounded Runtime states and five control operations | PASS | Frontend 8/8, lint, typecheck, Vite build, real rebuilt app launch and clean quit; screen lock prevented a fresh visual inspection | PASS |
+| PROC | RuntimeManager starts, handshakes, queries, stops, recovers, and reaps | PASS | Debug and Release process CTests 25/25 plus RuntimeManager gate repeated three times per profile | PASS |
+| IPC | Framing, bounds, correlation, command, and version errors are deterministic | PASS | JS contract 6/6, Rust protocol 17/17, native contract and hostile-process CTests | PASS |
+| MOCK | Runtime dynamically loads the Mock through C ABI and returns a fixed checksum | PASS | Native CTest plus staged Tauri invoke integration reached handshake, Mock command, ordered shutdown, and reap | PASS |
+| ABI | C and C++20 consume the versioned caller-owned C ABI contract | PASS | Debug and Release C/C++ ABI, layout, scalar-drift, export, and dynamic-loader gates | PASS |
+| PCM | PCM remains native-only; IPC and UI receive only a bounded summary | PASS | Mock pipeline wire result remains the fixed 80-byte summary; contract and desktop tests reject payload drift | PASS |
+| LOG | Structured Rust/C++ logs cannot corrupt stdout IPC or log per frame | PASS | Telemetry, native logging, stderr flood, stdout framing, and no-hot-path-log gates passed | PASS |
+| CONFIG | Strict config and capability semantics fail closed with actionable errors | PASS | Config 6/6, capability 2/2, staging, bundle, and native startup evidence | PASS |
+| TEST | Contract, Runtime, benchmark, frontend, Rust, and build gates pass | PASS | Full suites passed; benchmark repeated 10 times per native profile with 20-second test deadlines | PASS |
+| ADR | ADR-000/001/002 match implementation and the next ADR number remains reserved | PASS | Documentation contract 8/8 and repository filename audit | PASS |
+| EXCL | No Python, PyTorch, CUDA, ONNX Runtime, model payload, cloud/account/player, or real audio-device integration exists | PASS | Dependency closure, CMake link graph, exact package inventory, Mach-O dependency and symbol audits described below | PASS |
 
 The macOS `PASS` entries are local results only. They do not infer a Windows
 result. The authoritative protocol and ABI versions are in
@@ -190,18 +189,17 @@ are reproducible local evidence, not committed binaries.
 
 | Job | Status | Evidence URL |
 | --- | --- | --- |
-| Windows x64 | PENDING | PENDING — no run URL available |
+| Windows x64 | PASS | https://github.com/nacho198728-stack/ai-voice-studio/actions/runs/32361978210/job/96403295911 |
 
 The workflow's `windows-x64` job declares x64 MSVC, exact Node/pnpm/Rust/CMake/
 Ninja checks, Debug and Release CTest, unique DLL export, real dynamic loading,
 Runtime process shutdown/reap, native desktop integration, Tauri `--no-bundle`,
-and portable layout verification. Those declarations and fixtures pass local
-static validation, but they are not Windows execution evidence.
+and portable layout verification. The linked job executed these gates
+successfully on `windows-latest` x64 with MSVC and is the authoritative Task 18
+Windows evidence.
 
 ## Known limitations
 
-- No real `windows-latest` job has run, so Task 18 and this final gate remain
-  pending.
 - The current macOS session was locked. The rebuilt app's launch and exit were
   freshly exercised, but its pixels and interactions were not visually
   rechecked in this run.
@@ -225,17 +223,10 @@ static validation, but they are not Windows execution evidence.
 - Keep PCM below the Runtime/plugin boundary and continue returning bounded
   summaries to the control plane.
 - Decide release signing/notarization separately from Audio Engine work.
-- Import the successful real Windows x64 job URL before changing either
-  pending plan item.
+- Preserve the successful Windows x64 workflow as a required baseline gate.
 
 ## Minimal external action
 
-1. Create or select a GitHub repository for this existing local history.
-2. Add it as a Git remote and push this branch without rewriting commits.
-3. Trigger the checked-in workflow and obtain a successful `windows-x64` job
-   on a real `windows-latest` runner.
-4. Retain the job URL and logs, review the Windows native/Tauri artifacts, then
-   update acceptance governance in a separate reviewed change.
-
-This task did not create a remote, push, mutate either unchecked plan item, or
-create the reserved architecture-decision file.
+Completed: the private GitHub repository is configured, this branch is pushed,
+and the linked macOS arm64 and Windows x64 jobs are successful. No further
+external action is required for Phase 0.5. ADR-003 remains reserved.

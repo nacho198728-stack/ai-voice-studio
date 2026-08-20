@@ -62,8 +62,7 @@ make the intended boundaries testable.
 - Root automation must coordinate Node/pnpm, Rust/Cargo, and CMake/Ninja and
   keep their exact or minimum versions documented.
 - CI must cover macOS arm64 and Windows x64 rather than assuming one platform's
-  success transfers to the other. The workflow exists; real Windows execution
-  remains pending.
+  success transfers to the other. Both real runner jobs are accepted.
 - Directory co-location does not permit ownership shortcuts: Rust does not load
   engine plugins, and native PCM does not cross RuntimeMessage or Tauri.
 - Reserved modules such as `audio`, `backend`, and `core/model-package` may

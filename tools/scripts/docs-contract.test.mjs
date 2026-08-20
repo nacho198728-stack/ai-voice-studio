@@ -239,23 +239,16 @@ async function assertMarkdownLinkResolves(document, rawTarget) {
   assert.ok(headingAnchors(targetMarkdown).has(anchor), `${document} has unresolved anchor ${target}`);
 }
 
-function windowsEvidenceIsPending(adr) {
+function windowsEvidenceIsAccepted(adr) {
   const rows = tableRowsByKey(adr, "### Platform verification status");
   const windows = rows.get("Windows x64");
   if (!windows) return false;
   const status = windows.slice(1).join(" ").toLowerCase();
   return (
-    status.includes("source/config/fixture only") &&
+    status.includes("accepted") &&
+    status.includes("real github-hosted windows x64/msvc") &&
     status.includes("task 18") &&
-    status.includes("pending") &&
-    status.includes("not accepted") &&
-    !claimsCompletedWindowsExecution(adr)
-  );
-}
-
-function claimsCompletedWindowsExecution(markdown) {
-  return /\b(?:tested|validated|verified|usable)\b[^\n|]{0,100}\b(?:on|for|and)\s+windows\b/iu.test(
-    markdown,
+    !status.includes("pending")
   );
 }
 
@@ -368,7 +361,7 @@ test("tool versions are bound to their authoritative DEVELOPMENT table rows", as
     nativeRows,
     "Visual Studio / MSVC",
     sourceObjectVersion(doctor, "minimumVersions", "msvc"),
-    "real Windows run pending",
+    "accepted real Windows x64 workflow run",
   );
 
   const wrongRowWithStrayCorrectToken = development
@@ -475,22 +468,16 @@ test("architecture graph, commands, and public DTO tables match implementation s
   assert.match(desktopSource, /CapabilityAvailability::NotEvaluated => "not_evaluated"/u);
 });
 
-test("Windows ABI evidence is source/config/fixture-only and cannot claim completed execution", async () => {
+test("Windows ABI evidence records the accepted real runner", async () => {
   const adr = await text("docs/adr/ADR-002-cpp-runtime-c-abi.md");
   const workflow = parseYaml(await text(".github/workflows/build.yml"));
   assert.ok(workflow.jobs["windows-x64"], "Windows validation path must remain configured");
-  assert.equal(windowsEvidenceIsPending(adr), true);
-  for (const document of [
-    "docs/architecture/ARCHITECTURE.md",
-    "docs/development/DEVELOPMENT.md",
-    "docs/adr/ADR-000-monorepo.md",
-    "docs/adr/ADR-001-tauri-rust-control-plane.md",
-    "docs/adr/ADR-002-cpp-runtime-c-abi.md",
-  ]) {
-    assert.equal(claimsCompletedWindowsExecution(await text(document)), false, document);
-  }
-  const falseCompletion = `${adr}\nThe ABI is one tested ABI on macOS and Windows.\n`;
-  assert.equal(windowsEvidenceIsPending(falseCompletion), false);
+  assert.equal(windowsEvidenceIsAccepted(adr), true);
+  const reverted = adr.replace(
+    "Accepted: real GitHub-hosted Windows x64/MSVC workflow passed Task 18.",
+    "Source/config/fixture only; Task 18 pending and not accepted.",
+  );
+  assert.equal(windowsEvidenceIsAccepted(reverted), false);
 });
 
 test("architecture records scope exclusions, summary wire size, and ADR-003 reservation", async () => {

@@ -2,8 +2,8 @@
 
 This guide describes the implemented Phase 0.5 repository. Run commands from
 the repository root unless a section says otherwise. The macOS arm64 gate has
-been exercised locally. The Windows x64 workflow exists, but real Windows
-execution is pending and is not accepted until the workflow runs on GitHub.
+been exercised locally. Windows x64 execution is accepted by the successful
+real GitHub-hosted runner linked from the Phase 0.5 acceptance report.
 
 ## Toolchain contract
 
@@ -28,7 +28,7 @@ Native minimums and CI's known versions are:
 | Ninja | `1.10.0` | `1.13.2` |
 | Git | `2.40.0` | `2.50.1` locally |
 | Xcode | `15.0.0` | `26.6.0` locally on macOS arm64 |
-| Visual Studio / MSVC | VS 2022, MSVC v143, compiler `19.38.0` or newer | workflow declared; real Windows run pending |
+| Visual Studio / MSVC | VS 2022, MSVC v143, compiler `19.38.0` or newer | accepted real Windows x64 workflow run |
 
 CMake and Ninja are installed at the exact CI versions by the workflow. A
 newer compatible local native tool is allowed when the doctor accepts it.
@@ -195,11 +195,9 @@ manually removing old development logs.
 [`build.yml`](../../.github/workflows/build.yml) defines bounded macOS 15 arm64
 and Windows x64 MSVC jobs. Both run locked JS, frontend, Rust, CMake Debug and
 Release, CTest, real native integration, staging, and Tauri layout validation;
-caches are not correctness prerequisites. The macOS-equivalent commands have
-been run locally. There is no Git remote in this workspace, so the workflow
-has not executed on a GitHub Windows runner: Windows acceptance is pending and
-not accepted. Triggering `push`, `pull_request`, or `workflow_dispatch` in a
-GitHub repository is the remaining external action.
+caches are not correctness prerequisites. The macOS commands passed locally
+and on the hosted arm64 runner; the Windows x64/MSVC job passed on the real
+GitHub-hosted runner linked from the Phase 0.5 acceptance report.
 
 ## Troubleshooting
 

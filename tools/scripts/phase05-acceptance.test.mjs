@@ -177,10 +177,13 @@ test("acceptance gate rejects impossible unique counts and aggregate total drift
   );
 });
 
-test("checked-in acceptance remains pending only on an unrun real Windows job", async () => {
+test("checked-in acceptance is complete only with the real Windows job", async () => {
   const result = await repositoryAcceptance();
-  assert.equal(result.status, "PENDING");
-  assert.equal(result.windowsEvidenceUrl, null);
+  assert.equal(result.status, "PASS");
+  assert.equal(
+    result.windowsEvidenceUrl,
+    "https://github.com/nacho198728-stack/ai-voice-studio/actions/runs/32361978210/job/96403295911",
+  );
   assert.equal(result.requirementCount, 13);
   assert.equal(result.artifactCount, 6);
 });
@@ -194,7 +197,7 @@ test("macOS absolute evidence remains auditable from a different checkout path",
   assert.equal(result.artifactCount, 6);
 });
 
-test("acceptance gate rejects a false Windows result or prematurely checked final plan tasks", async () => {
+test("acceptance gate rejects a false Windows result or reverted final plan tasks", async () => {
   const input = await loadPhase05Acceptance(repositoryRoot);
 
   assert.throws(
@@ -202,22 +205,22 @@ test("acceptance gate rejects a false Windows result or prematurely checked fina
       validatePhase05Acceptance({
         ...input,
         markdown: input.markdown.replace(
-          "| Windows x64 | PENDING | PENDING — no run URL available |",
+          "| Windows x64 | PASS | https://github.com/nacho198728-stack/ai-voice-studio/actions/runs/32361978210/job/96403295911 |",
           "| Windows x64 | PASS | https://example.invalid/fake-run |",
         ),
       }),
-    /Windows x64 evidence must remain pending/u,
+    /Windows x64 evidence URL/u,
   );
   assert.throws(
     () =>
       validatePhase05Acceptance({
         ...input,
         planMarkdown: input.planMarkdown.replace(
-          "- [ ] 在 `.github/workflows/build.yml`",
           "- [x] 在 `.github/workflows/build.yml`",
+          "- [ ] 在 `.github/workflows/build.yml`",
         ),
       }),
-    /Task 18 must remain unchecked/u,
+    /Task 18 must be checked/u,
   );
 });
 
