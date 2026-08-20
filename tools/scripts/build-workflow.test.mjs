@@ -144,4 +144,13 @@ test("platform jobs fail closed on architecture and exercise native Tauri layout
   assert.match(windows, /voice-runtime-x86_64-pc-windows-msvc\.exe/u);
   assert.match(windows, /aivs_mock_voice_engine-x86_64-pc-windows-msvc\.dll/u);
   assert.match(windows, /verify-desktop-bundle\.mjs.*x86_64-pc-windows-msvc/u);
+
+  const windowsIcon = await readFile(
+    path.join(repositoryRoot, "apps/desktop/src-tauri/icons/icon.ico"),
+  );
+  assert.deepEqual(
+    [...windowsIcon.subarray(0, 4)],
+    [0, 0, 1, 0],
+    "the clean Windows Tauri build requires a real ICO resource",
+  );
 });
