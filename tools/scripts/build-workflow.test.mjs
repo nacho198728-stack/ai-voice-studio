@@ -87,17 +87,21 @@ test("both jobs execute the locked workspace and Debug plus Release contracts", 
   }
 });
 
-test("both jobs stage real native artifacts before checking the Tauri Rust workspace", async () => {
+test("both jobs build and stage native artifacts, warm Rust, then execute CTest", async () => {
   const workflow = await loadWorkflow();
   for (const job of Object.values(workflow.jobs)) {
     const run = commands(job);
+    const nativeBuildIndex = run.indexOf("cmake --build --preset native-release");
     const stageIndex = run.indexOf("stage-desktop-native.mjs --profile Release");
     const rustCheckIndex = run.indexOf("cargo +1.97.1 check --locked --workspace --all-targets");
+    const nativeTestIndex = run.indexOf("ctest --preset native-release");
+    assert.notEqual(nativeBuildIndex, -1);
     assert.notEqual(stageIndex, -1);
     assert.notEqual(rustCheckIndex, -1);
+    assert.notEqual(nativeTestIndex, -1);
     assert.ok(
-      stageIndex < rustCheckIndex,
-      "native staging must precede the Tauri build script invoked by cargo check",
+      nativeBuildIndex < stageIndex && stageIndex < rustCheckIndex && rustCheckIndex < nativeTestIndex,
+      "native binaries must be staged before Cargo, while Cargo must warm fixture tests before CTest",
     );
   }
 });

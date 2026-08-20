@@ -61,16 +61,14 @@ jobs:
           pnpm --filter @ai-voice-studio/desktop typecheck
           pnpm --filter @ai-voice-studio/desktop build
 
-      - name: Build, test, and stage native Debug and Release
+      - name: Build and stage native Debug and Release
         shell: bash
         run: |
           set -euo pipefail
           cmake --preset native-debug
           cmake --build --preset native-debug --parallel 2
-          ctest --preset native-debug
           cmake --preset native-release
           cmake --build --preset native-release --parallel 2
-          ctest --preset native-release
           node tools/scripts/stage-desktop-native.mjs --profile Release --target aarch64-apple-darwin
 
       - name: Check Rust workspace
@@ -81,6 +79,13 @@ jobs:
           cargo +1.97.1 check --locked --workspace --all-targets
           cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings
           cargo +1.97.1 test --locked --workspace
+
+      - name: Test native Debug and Release after Rust warmup
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --preset native-debug
+          ctest --preset native-release
 
       - name: Build and verify the Tauri app bundle
         shell: bash
@@ -164,16 +169,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset native-debug --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --preset native-debug
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --test-dir build/native-debug --output-on-failure -R "^(aivs_mock_voice_engine_exports|aivs_mock_voice_engine_dynamic_test|aivs_voice_runtime_smoke|aivs_runtime_manager_child_test|aivs_runtime_manager_gate_test|aivs_desktop_exit_runtime_race_test)$"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           cmake --preset native-release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset native-release --parallel 2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --preset native-release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           node tools/scripts/stage-desktop-native.mjs --profile Release --target x86_64-pc-windows-msvc
@@ -186,6 +185,13 @@ jobs:
           cargo +1.97.1 clippy --locked --workspace --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +1.97.1 test --locked --workspace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          ctest --preset native-debug
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build/native-debug --output-on-failure -R "^(aivs_mock_voice_engine_exports|aivs_mock_voice_engine_dynamic_test|aivs_voice_runtime_smoke|aivs_runtime_manager_child_test|aivs_runtime_manager_gate_test|aivs_desktop_exit_runtime_race_test)$"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --preset native-release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           pnpm desktop:test:native
